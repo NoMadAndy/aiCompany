@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import Sidebar from '@/components/Sidebar'
 import StatusBar from '@/components/StatusBar'
-import { ScrollText, RefreshCw, Filter, ArrowDown } from 'lucide-react'
+import { ScrollText, RefreshCw, ArrowUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface LogEntry {
@@ -27,7 +27,7 @@ export default function LogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [filter, setFilter] = useState<string>('')
   const [autoScroll, setAutoScroll] = useState(true)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const topRef = useRef<HTMLDivElement>(null)
 
   const fetchLogs = () => {
     const url = filter ? `/api/logs?type=${filter}` : '/api/logs'
@@ -41,7 +41,7 @@ export default function LogsPage() {
   }, [filter])
 
   useEffect(() => {
-    if (autoScroll) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (autoScroll) topRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [logs, autoScroll])
 
   const types = ['system', 'project', 'task', 'error', 'ai', 'finance']
@@ -66,8 +66,9 @@ export default function LogsPage() {
                 <button
                   onClick={() => setAutoScroll(!autoScroll)}
                   className={cn('p-2 rounded-lg glass transition-colors', autoScroll && 'text-indigo-400 glow-accent')}
+                  title={autoScroll ? 'Auto-Scroll aktiv (neueste oben)' : 'Auto-Scroll deaktiviert'}
                 >
-                  <ArrowDown size={16} />
+                  <ArrowUp size={16} />
                 </button>
               </div>
             </div>
@@ -96,6 +97,7 @@ export default function LogsPage() {
 
           <div className="flex-1 overflow-y-auto px-6 lg:px-8 pb-4">
             <div className="glass rounded-xl font-mono text-sm">
+              <div ref={topRef} />
               {logs.map((log) => (
                 <div key={log.id} className="log-line flex gap-3 px-4 py-2 border-b border-[var(--border)]/50">
                   <span className="text-[var(--text-secondary)] shrink-0 w-[140px]">
@@ -110,7 +112,6 @@ export default function LogsPage() {
               {logs.length === 0 && (
                 <div className="text-center py-12 text-[var(--text-secondary)]">Keine Logs vorhanden</div>
               )}
-              <div ref={bottomRef} />
             </div>
           </div>
         </main>

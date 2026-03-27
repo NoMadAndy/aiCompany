@@ -5,6 +5,23 @@ Alle wichtigen Änderungen an AI Company werden hier dokumentiert.
 Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.3.1] - 2026-03-27
+
+### Behoben
+- **Changelog**: Zeigt jetzt alle Versionen aus CHANGELOG.md (statt nur DB-Eintrag v0.1.0)
+- **Logs**: Neueste Einträge oben, Auto-Scroll zum Anfang statt zum Ende
+- **Agent-Karten**: Input-Feld klappt Karte nicht mehr zu (stopPropagation)
+
+### Hinzugefügt
+- **README.md**: Vollständige Projektdokumentation mit Schnellstart, Architektur, Agenten-Ubersicht
+- **docs/ARCHITECTURE.md**: Technische Architektur, Datenflüsse, Schema, Sicherheit
+- **docs/AGENTS.md**: Agenten-Dokumentation mit Skills, Keywords, Ergebnis-Formate
+- **docs/API.md**: Komplette API-Referenz aller Endpunkte
+
+### Geändert
+- Changelog-API parst CHANGELOG.md direkt statt DB-Fallback
+- Log-Icon von ArrowDown zu ArrowUp (neueste oben)
+
 ## [0.3.0] - 2026-03-27
 
 ### Hinzugefügt

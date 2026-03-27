@@ -229,7 +229,7 @@ export default function AgentsPage() {
                         </div>
 
                         {isSelected && (
-                          <div className="mt-4 pt-4 border-t border-[var(--border)]">
+                          <div className="mt-4 pt-4 border-t border-[var(--border)]" onClick={e => e.stopPropagation()}>
                             <p className="text-xs text-[var(--text-secondary)] mb-3 italic">
                               &ldquo;{emp.system_prompt}&rdquo;
                             </p>
