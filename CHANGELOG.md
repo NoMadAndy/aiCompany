@@ -8,6 +8,7 @@ Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 ## [0.3.1] - 2026-03-27
 
 ### Behoben
+- **Gradient-Border blockiert Klicks**: `pointer-events: none` auf `::before` Pseudo-Element — "An ARIA übergeben" und alle Buttons in Projektkarten sind jetzt klickbar
 - **Changelog**: Zeigt jetzt alle Versionen aus CHANGELOG.md (statt nur DB-Eintrag v0.1.0)
 - **Logs**: Neueste Einträge oben, Auto-Scroll zum Anfang statt zum Ende
 - **Agent-Karten**: Input-Feld klappt Karte nicht mehr zu (stopPropagation)
