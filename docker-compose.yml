@@ -1,0 +1,112 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3002:3000"
+    environment:
+      - DATABASE_URL=postgresql://aicompany:aicompany@db:5432/aicompany
+      - REDIS_URL=redis://redis:6379
+      - WORKER_URL=http://worker:8080
+      - NEXT_PUBLIC_WS_URL=wss://aicompany.macherwerkstatt.cc
+      - NEXT_PUBLIC_APP_URL=https://aicompany.macherwerkstatt.cc
+    volumes:
+      - ./frontend/src:/app/src
+      - ./CHANGELOG.md:/app/CHANGELOG.md:ro
+      - ./version.json:/app/version.json:ro
+      - app-logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - aicompany
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://aicompany:aicompany@db:5432/aicompany
+      - REDIS_URL=redis://redis:6379
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ./worker:/app
+      - worker-data:/app/data
+      - app-logs:/app/logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - aicompany
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=aicompany
+      - POSTGRES_USER=aicompany
+      - POSTGRES_PASSWORD=aicompany
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aicompany"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - aicompany
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - aicompany
+
+  watcher:
+    image: node:18-alpine
+    working_dir: /watch
+    command: >-
+      sh -c "npm install -g chokidar-cli &&
+      chokidar '**/*.ts' '**/*.tsx' '**/*.py' '**/*.json' '**/*.css'
+      -c 'echo CHANGE_DETECTED'
+      --ignore node_modules --ignore .next --ignore __pycache__"
+    volumes:
+      - ./frontend/src:/watch/frontend/src:ro
+      - ./worker:/watch/worker:ro
+    restart: unless-stopped
+    networks:
+      - aicompany
+
+volumes:
+  postgres_data:
+  redis_data:
+  worker-data:
+  app-logs:
+
+networks:
+  aicompany:
+    driver: bridge
