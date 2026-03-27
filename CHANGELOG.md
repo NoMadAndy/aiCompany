@@ -5,6 +5,24 @@ Alle wichtigen Änderungen an AI Company werden hier dokumentiert.
 Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.3.0] - 2026-03-27
+
+### Hinzugefügt
+- **ARIA Projektkoordinator**: Projekte können an ARIA übergeben werden
+  - Automatische Projektanalyse basierend auf Name, Beschreibung und Config
+  - Intelligente Task-Generierung (Research, Code, ML, Finanzen, Planung)
+  - Automatische Delegation an spezialisierte Agenten (SCOUT, NEXUS, FORGE, VAULT)
+  - Sequenzielle Ausführung nach Priorität
+- **Worker `/coordinate` Endpoint**: Neue API für Projektkoordination
+- **"An ARIA übergeben" Button**: Auf der Projektseite für jedes Projekt
+- **Live Task-Ansicht pro Projekt**: Aufklappbare Task-Liste mit Ergebnissen
+- **Verbessertes Projekt-Formular**: Textarea für Beschreibung, besseres Layout
+- **Echtzeit-Fortschritt**: Polling für laufende Koordinationen
+
+### Geändert
+- Projektseite von Grid zu vertikalem Layout (bessere Task-Darstellung)
+- Projekt-Status wird automatisch auf "active" gesetzt bei Koordination
+
 ## [0.2.0] - 2026-03-27
 
 ### Hinzugefügt

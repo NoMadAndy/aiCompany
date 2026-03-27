@@ -509,6 +509,216 @@ async def execute_task(req: TaskRequest):
                 pass
 
 
+class CoordinateRequest(BaseModel):
+    project_id: int
+
+
+# Agent-to-employee mapping
+AGENT_ROLES = {
+    "research": {"name": "SCOUT", "id": 3},
+    "code_generation": {"name": "NEXUS", "id": 2},
+    "analysis": {"name": "SCOUT", "id": 3},
+    "finance": {"name": "VAULT", "id": 5},
+    "ml_training": {"name": "FORGE", "id": 4},
+    "planning": {"name": "ARIA", "id": 1},
+    "general": {"name": "NEXUS", "id": 2},
+}
+
+
+def generate_project_tasks(name: str, description: str, config: dict) -> list:
+    """ARIA analyzes a project and generates task breakdown"""
+    desc_lower = (name + " " + description).lower()
+    tasks = []
+
+    # Always start with research
+    tasks.append({
+        "title": f"Recherche: Marktanalyse und Stand der Technik für '{name}'",
+        "agent": "research",
+        "priority": 1,
+        "description": f"Umfassende Recherche zu: {description[:200]}",
+    })
+
+    # Finance/budget tasks if budget mentioned or > 0
+    if any(w in desc_lower for w in ["budget", "geld", "kosten", "invest", "€", "euro", "finanz", "profit", "umsatz"]):
+        tasks.append({
+            "title": f"Finanzplanung und Budgetierung für '{name}'",
+            "agent": "finance",
+            "priority": 2,
+            "description": f"Erstelle Finanzplan und Budget-Breakdown für das Projekt",
+        })
+
+    # Code/development tasks
+    if any(w in desc_lower for w in ["app", "software", "plattform", "website", "tool", "system", "api",
+                                       "develop", "code", "programm", "build", "erstell", "automat"]):
+        tasks.append({
+            "title": f"Technische Architektur und Implementierungsplan für '{name}'",
+            "agent": "code_generation",
+            "priority": 3,
+            "description": f"Entwerfe die technische Architektur und erstelle einen Implementierungsplan",
+        })
+
+    # ML/AI tasks
+    if any(w in desc_lower for w in ["ki", "ai", "model", "train", "neural", "machine learning",
+                                       "ml", "deep learning", "gpu", "prediction", "klassifik"]):
+        tasks.append({
+            "title": f"ML-Konzept und Modellauswahl für '{name}'",
+            "agent": "ml_training",
+            "priority": 3,
+            "description": f"Evaluiere geeignete ML-Modelle und erstelle ein Trainingskonzept",
+        })
+
+    # Data/analysis tasks
+    if any(w in desc_lower for w in ["daten", "data", "analys", "statistik", "auswert", "monitor", "track"]):
+        tasks.append({
+            "title": f"Datenanalyse und Metriken-Definition für '{name}'",
+            "agent": "analysis",
+            "priority": 3,
+            "description": f"Definiere relevante Metriken und erstelle Analyse-Framework",
+        })
+
+    # Content/creative tasks
+    if any(w in desc_lower for w in ["content", "text", "bild", "video", "kreativ", "design", "marketing"]):
+        tasks.append({
+            "title": f"Content-Strategie und Erstellung für '{name}'",
+            "agent": "research",
+            "priority": 4,
+            "description": f"Entwickle Content-Strategie und erstelle erste Inhalte",
+        })
+
+    # Strategy tasks from config
+    if config:
+        strategies = config.get("strategies", [])
+        for strat in strategies[:3]:  # max 3 strategy tasks
+            strat_name = strat.replace("_", " ").title()
+            tasks.append({
+                "title": f"Strategie umsetzen: {strat_name} für '{name}'",
+                "agent": "planning" if "manage" in strat else "research",
+                "priority": 4,
+                "description": f"Implementiere die Strategie '{strat_name}' im Rahmen des Projekts",
+            })
+
+    # If no specific tasks were generated (besides research), add general ones
+    if len(tasks) <= 1:
+        tasks.append({
+            "title": f"Detailplanung und Meilensteine für '{name}'",
+            "agent": "planning",
+            "priority": 2,
+            "description": f"Erstelle detaillierten Projektplan mit Meilensteinen",
+        })
+        tasks.append({
+            "title": f"Ressourcen-Analyse für '{name}'",
+            "agent": "analysis",
+            "priority": 3,
+            "description": f"Analysiere benötigte Ressourcen und erstelle Zeitplan",
+        })
+
+    # Always end with a summary/coordination task
+    tasks.append({
+        "title": f"Projektkoordination: Zusammenfassung und nächste Schritte für '{name}'",
+        "agent": "planning",
+        "priority": 10,
+        "description": f"Fasse alle Teilergebnisse zusammen und definiere die nächsten Schritte",
+    })
+
+    return tasks
+
+
+@app.post("/coordinate")
+async def coordinate_project(req: CoordinateRequest, background_tasks: BackgroundTasks):
+    """ARIA coordinates a project: analyzes it, creates tasks, delegates to team"""
+    logger.info(f"Coordination requested for project {req.project_id}")
+    background_tasks.add_task(execute_coordination, req.project_id)
+    return {"status": "coordinating", "project_id": req.project_id}
+
+
+async def execute_coordination(project_id: int):
+    """ARIA's coordination logic: break project into tasks and delegate"""
+    conn = None
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+
+        # Get project details
+        cur.execute("SELECT id, name, description, config, budget FROM projects WHERE id = %s", (project_id,))
+        project = cur.fetchone()
+        if not project:
+            logger.error(f"Project {project_id} not found")
+            return
+
+        p_id, p_name, p_desc, p_config, p_budget = project
+        if isinstance(p_config, str):
+            p_config = json.loads(p_config)
+        p_config = p_config or {}
+
+        # ARIA starts coordination
+        aria_id = 1  # ARIA's employee_id
+        log_activity("ai", f"[ARIA] Übernehme Projektkoordination für '{p_name}'", project_id=p_id, employee_id=aria_id)
+
+        # Update project status to active
+        cur.execute("UPDATE projects SET status = 'active', updated_at = NOW() WHERE id = %s", (p_id,))
+        conn.commit()
+
+        # Generate task breakdown
+        task_list = generate_project_tasks(p_name, p_desc or "", p_config)
+
+        log_activity("ai", f"[ARIA] Projektanalyse abgeschlossen: {len(task_list)} Aufgaben identifiziert für '{p_name}'",
+                     project_id=p_id, employee_id=aria_id)
+
+        # Create all tasks in DB and trigger execution
+        created_tasks = []
+        for task_def in task_list:
+            agent_info = AGENT_ROLES.get(task_def["agent"], AGENT_ROLES["general"])
+
+            cur.execute(
+                "INSERT INTO tasks (project_id, employee_id, title, description, priority, status) VALUES (%s, %s, %s, %s, %s, 'pending') RETURNING id",
+                (p_id, agent_info["id"], task_def["title"], task_def.get("description", ""), task_def["priority"])
+            )
+            task_id = cur.fetchone()[0]
+            conn.commit()
+
+            created_tasks.append({
+                "task_id": task_id,
+                "title": task_def["title"],
+                "agent": agent_info["name"],
+                "priority": task_def["priority"],
+            })
+
+            log_activity("task",
+                         f"[ARIA] Aufgabe delegiert an {agent_info['name']}: {task_def['title'][:80]}",
+                         project_id=p_id, employee_id=aria_id)
+
+        cur.close()
+        conn.close()
+
+        # Now execute tasks sequentially by priority (lower = higher priority)
+        sorted_tasks = sorted(created_tasks, key=lambda t: t["priority"])
+
+        for task_info in sorted_tasks:
+            try:
+                req = TaskRequest(
+                    task_id=task_info["task_id"],
+                    action=task_info["title"],
+                    employee_id=AGENT_ROLES.get(task_info.get("agent_type", "general"), AGENT_ROLES["general"])["id"],
+                )
+                await execute_task(req)
+            except Exception as e:
+                logger.error(f"Task {task_info['task_id']} execution error: {e}")
+
+        # Final summary
+        log_activity("ai",
+                     f"[ARIA] Projektkoordination abgeschlossen: {len(created_tasks)} Tasks für '{p_name}' erstellt und ausgeführt",
+                     project_id=p_id, employee_id=aria_id)
+
+    except Exception as e:
+        logger.error(f"Coordination error: {e}")
+        log_activity("error", f"[ARIA] Koordination fehlgeschlagen: {str(e)}", project_id=project_id, employee_id=1)
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 @app.post("/research")
 async def web_research(query: dict, background_tasks: BackgroundTasks):
     """Perform web research on a topic"""
