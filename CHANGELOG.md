@@ -5,6 +5,37 @@ Alle wichtigen Änderungen an AI Company werden hier dokumentiert.
 Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.4.0] - 2026-03-27 — "Cortex"
+
+### Hinzugefügt
+- **AI Engine** (`ai_engine.py`): Zentrales KI-Gehirn mit dreistufiger Fallback-Kette
+  - Claude API (höchste Qualität, wenn ANTHROPIC_API_KEY gesetzt)
+  - Lokales GPU-Modell (Qwen2.5-3B-Instruct auf RTX 2080 Super)
+  - CPU-Fallback für Verfügbarkeit ohne GPU
+- **Echte KI-Agenten**: Alle 5 Agenten nutzen jetzt echte LLM-Inferenz
+  - ARIA: Strategische Planung mit strukturierter JSON-Ausgabe
+  - SCOUT: Web-Recherche + KI-Analyse der Ergebnisse
+  - NEXUS: Echte Code-Generierung mit funktionierendem Output
+  - FORGE: GPU-Benchmarks + KI-gestützte ML-Empfehlungen
+  - VAULT: Finanzanalysen mit echten Daten + KI-Interpretation
+- **Strukturierte KI-Ausgabe** (`think_structured`): JSON-Extraktion aus LLM-Antworten
+- **Agent-Persönlichkeiten**: Detaillierte System-Prompts für jeden Agenten (deutsch)
+- **`/ai-status` Endpoint**: Echtzeit-Status des KI-Backends (GPU, Modell, API)
+- **`/ai/preload` Endpoint**: Modell vorab laden für schnellere erste Antwort
+- **Model-Cache Volume**: Heruntergeladene Modelle bleiben über Docker-Rebuilds erhalten
+
+### Geändert
+- Worker komplett neugeschrieben für echte KI-Integration
+- Alle Task-Executors nutzen `think()` statt regelbasierter Templates
+- Koordination nutzt `think_structured()` für intelligente Aufgabenzerlegung
+- Docker Compose: ANTHROPIC_API_KEY, LOCAL_MODEL, HF_HOME Environment-Variablen
+
+### Abhängigkeiten
+- `anthropic==0.42.0` — Claude API SDK
+- `bitsandbytes==0.45.4` — GPU-Speicheroptimierung
+- `sentencepiece==0.2.0` — Tokenizer-Backend
+- `protobuf==5.29.3` — Serialisierung
+
 ## [0.3.1] - 2026-03-27
 
 ### Behoben

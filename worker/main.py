@@ -1,4 +1,4 @@
-"""AI Company Worker - GPU-enabled AI task processing"""
+"""AI Company Worker — GPU-enabled AI task processing with real intelligence."""
 
 import os
 import json
@@ -14,22 +14,22 @@ import redis
 import httpx
 
 from tasks.research import web_search, search_scientific
-from tasks.code_gen import generate_code
+from ai_engine import think, think_structured, get_engine_status, load_local_model
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai-worker")
 
-app = FastAPI(title="AI Company Worker", version="0.1.0")
+app = FastAPI(title="AI Company Worker", version="0.4.0")
 
-# Database connection
+
+# ─── Infrastructure ───────────────────────────────────────────────
+
 def get_db():
     return psycopg2.connect(os.environ.get("DATABASE_URL", "postgresql://aicompany:aicompany@db:5432/aicompany"))
 
-# Redis connection
 def get_redis():
     return redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379"))
 
-# GPU check
 def check_gpu():
     try:
         import torch
@@ -38,27 +38,12 @@ def check_gpu():
                 "available": True,
                 "device": torch.cuda.get_device_name(0),
                 "memory": f"{torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB",
+                "vram_used": f"{torch.cuda.memory_allocated() / 1e9:.1f} GB",
                 "cuda_version": torch.version.cuda,
             }
     except Exception:
         pass
     return {"available": False, "device": "CPU", "memory": "N/A"}
-
-
-class RunRequest(BaseModel):
-    prompt: str
-    type: str = "experiment"
-    project_id: Optional[int] = None
-    employee_id: Optional[int] = None
-
-
-class TaskRequest(BaseModel):
-    task_id: int
-    action: str
-    params: dict = {}
-    employee_id: Optional[int] = None
-    project_id: Optional[int] = None
-
 
 def log_activity(type_: str, message: str, project_id=None, employee_id=None, details=None):
     try:
@@ -74,9 +59,7 @@ def log_activity(type_: str, message: str, project_id=None, employee_id=None, de
     except Exception as e:
         logger.error(f"Failed to log activity: {e}")
 
-
 def get_employee_info(employee_id: int) -> dict:
-    """Get employee details from DB"""
     try:
         conn = get_db()
         cur = conn.cursor()
@@ -98,69 +81,189 @@ def get_employee_info(employee_id: int) -> dict:
     return {}
 
 
+# ─── Request Models ───────────────────────────────────────────────
+
+class RunRequest(BaseModel):
+    prompt: str
+    type: str = "experiment"
+    project_id: Optional[int] = None
+    employee_id: Optional[int] = None
+
+class TaskRequest(BaseModel):
+    task_id: int
+    action: str
+    params: dict = {}
+    employee_id: Optional[int] = None
+    project_id: Optional[int] = None
+
+class CoordinateRequest(BaseModel):
+    project_id: int
+
+
+# ─── Agent System Prompts ─────────────────────────────────────────
+
+AGENT_PROMPTS = {
+    "ARIA": """Du bist ARIA, Chief AI Officer der AI Company. Du bist eine brillante Strategin und Projektmanagerin.
+
+Deine Aufgaben:
+- Projekte analysieren und in konkrete, umsetzbare Aufgaben zerlegen
+- Aufgaben dem richtigen Teammitglied zuweisen
+- Fortschritt überwachen und Zusammenfassungen erstellen
+
+Dein Team:
+- NEXUS (Senior Developer): Programmierung, Architektur, technische Implementierung
+- SCOUT (Research Analyst): Web-Recherche, Datenanalyse, wissenschaftliche Quellen
+- FORGE (ML Engineer): Machine Learning, GPU-Training, Modelldesign
+- VAULT (Finance Manager): Budgets, Finanzanalysen, Investitionsstrategien
+
+Antworte immer auf Deutsch. Sei präzise, strukturiert und handlungsorientiert.""",
+
+    "NEXUS": """Du bist NEXUS, Senior Developer der AI Company. Du bist ein erfahrener Fullstack-Entwickler.
+
+Deine Expertise:
+- Python, TypeScript, JavaScript, SQL
+- Web-Frameworks: FastAPI, Next.js, React
+- Infrastruktur: Docker, PostgreSQL, Redis
+- GPU-Programmierung: PyTorch, CUDA
+
+Wenn du Code schreibst:
+- Schreibe vollständigen, lauffähigen Code (keine Platzhalter)
+- Kommentiere auf Deutsch
+- Nutze Best Practices und moderne Patterns
+- Teste gedanklich auf Edge Cases
+
+Antworte auf Deutsch. Sei technisch präzise.""",
+
+    "SCOUT": """Du bist SCOUT, Research Analyst der AI Company. Du bist ein akribischer Forscher und Analyst.
+
+Deine Expertise:
+- Web-Recherche und Quellenanalyse
+- Wissenschaftliche Literaturrecherche
+- Datenanalyse und Statistik
+- Marktanalysen und Trendforschung
+
+Wenn du recherchierst:
+- Analysiere die bereitgestellten Quellen kritisch
+- Fasse Kernaussagen zusammen
+- Identifiziere Trends und Muster
+- Gib immer Quellen an
+- Bewerte Zuverlässigkeit der Informationen
+
+Antworte auf Deutsch. Sei gründlich und quellenkritisch.""",
+
+    "FORGE": """Du bist FORGE, ML Engineer der AI Company. Du arbeitest mit einer NVIDIA RTX 2080 Super (8GB VRAM).
+
+Deine Expertise:
+- PyTorch, TensorFlow, Hugging Face Transformers
+- Modelltraining und Fine-Tuning
+- GPU-Optimierung, Mixed Precision, Quantisierung
+- Modellarchitekturen: Transformer, CNN, GAN
+- MLOps: Model Deployment, Monitoring
+
+Wenn du ML-Aufgaben bearbeitest:
+- Berücksichtige die VRAM-Limitierung (8GB)
+- Empfehle passende Modellgrößen
+- Schreibe echten, ausführbaren PyTorch-Code
+- Erkläre Trade-offs zwischen Modellgröße und Qualität
+
+Antworte auf Deutsch. Sei technisch tiefgehend.""",
+
+    "VAULT": """Du bist VAULT, Finance Manager der AI Company. Du bist ein scharfsinniger Finanzanalyst.
+
+Deine Expertise:
+- Budgetplanung und -controlling
+- Investitionsanalyse und ROI-Berechnung
+- Risikobewertung und -management
+- Marktanalyse und Finanzstrategien
+- Kostenoptimierung
+
+Wenn du Finanzaufgaben bearbeitest:
+- Nutze konkrete Zahlen und Berechnungen
+- Erstelle strukturierte Berichte
+- Bewerte Risiken realistisch
+- Schlage messbare KPIs vor
+
+Antworte auf Deutsch. Sei zahlengetrieben und realistisch.""",
+}
+
+# Agent name to employee_id mapping
+AGENT_IDS = {"ARIA": 1, "NEXUS": 2, "SCOUT": 3, "FORGE": 4, "VAULT": 5}
+ID_TO_AGENT = {v: k for k, v in AGENT_IDS.items()}
+
+
+# ─── Task Classification ─────────────────────────────────────────
+
 def classify_task(title: str, employee: dict) -> str:
-    """Determine what kind of work this task requires based on title and agent skills"""
     title_lower = title.lower()
     dept = employee.get("department", "")
 
-    # Research tasks
-    if any(w in title_lower for w in ["recherch", "such", "find", "research", "analys", "paper", "studie", "quelle"]):
+    if any(w in title_lower for w in ["recherch", "such", "find", "research", "analys", "paper", "studie", "quelle", "markt"]):
         return "research"
-    # Code tasks
-    if any(w in title_lower for w in ["code", "programm", "script", "implement", "develop", "build", "erstell", "schreib"]):
+    if any(w in title_lower for w in ["code", "programm", "script", "implement", "develop", "build", "erstell", "schreib", "architektur", "api", "app", "website", "function", "class", "modul"]):
         return "code_generation"
-    # Analysis / data tasks
-    if any(w in title_lower for w in ["daten", "data", "statistik", "bericht", "report", "auswert"]):
+    if any(w in title_lower for w in ["daten", "data", "statistik", "bericht", "report", "auswert", "dashboard"]):
         return "analysis"
-    # Finance tasks
-    if any(w in title_lower for w in ["budget", "geld", "finanz", "kosten", "invest", "rendite", "profit"]):
+    if any(w in title_lower for w in ["budget", "geld", "finanz", "kosten", "invest", "rendite", "profit", "roi", "preis"]):
         return "finance"
-    # GPU / ML tasks
-    if any(w in title_lower for w in ["train", "model", "gpu", "neural", "ml", "ki-modell", "machine learning"]):
+    if any(w in title_lower for w in ["train", "model", "gpu", "neural", "ml", "ki-modell", "machine learning", "fine-tun", "benchmark"]):
         return "ml_training"
 
-    # Fallback based on department
     dept_mapping = {
-        "Research": "research",
-        "Engineering": "code_generation",
-        "AI Lab": "ml_training",
-        "Finance": "finance",
-        "Management": "planning",
+        "Research": "research", "Engineering": "code_generation",
+        "AI Lab": "ml_training", "Finance": "finance", "Management": "planning",
     }
     return dept_mapping.get(dept, "general")
 
 
-async def execute_research(title: str, employee: dict) -> dict:
-    """Execute a research task"""
-    agent_name = employee.get("name", "Agent")
-    log_activity("ai", f"[{agent_name}] Starte Web-Recherche: {title[:80]}", employee_id=employee.get("id"))
+# ─── Task Executors (Real AI) ─────────────────────────────────────
 
+async def execute_research(title: str, employee: dict) -> dict:
+    """SCOUT researches with real web data + AI analysis"""
+    agent_name = employee.get("name", "SCOUT")
+    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["SCOUT"])
+    log_activity("ai", f"[{agent_name}] Starte Recherche: {title[:80]}", employee_id=employee.get("id"))
+
+    # Gather real web data
     web_results = await web_search(title)
     scientific_results = await search_scientific(title)
 
-    summary_parts = []
+    # Build context from real search results
+    context_parts = []
     if web_results:
-        summary_parts.append(f"**Web-Ergebnisse ({len(web_results)}):**")
-        for r in web_results[:3]:
-            summary_parts.append(f"- [{r['title']}]({r.get('url', '')}) — {r['snippet'][:120]}")
+        context_parts.append("WEB-ERGEBNISSE:")
+        for r in web_results[:5]:
+            context_parts.append(f"- {r['title']}: {r['snippet']}")
 
     if scientific_results:
-        summary_parts.append(f"\n**Wissenschaftliche Quellen ({len(scientific_results)}):**")
-        for r in scientific_results[:3]:
+        context_parts.append("\nWISSENSCHAFTLICHE PAPER:")
+        for r in scientific_results[:5]:
             year = f" ({r['year']})" if r.get('year') else ""
-            summary_parts.append(f"- {r['title']}{year} — {r.get('abstract', '')[:120]}...")
-            if r.get('citations'):
-                summary_parts[-1] += f" [{r['citations']} Zitierungen]"
+            cite = f" [{r['citations']} Zitierungen]" if r.get('citations') else ""
+            context_parts.append(f"- {r['title']}{year}{cite}: {r.get('abstract', '')[:200]}")
 
-    if not summary_parts:
-        summary_parts.append("Keine Ergebnisse gefunden. Versuche eine spezifischere Anfrage.")
+    context = "\n".join(context_parts) if context_parts else "Keine Suchergebnisse verfügbar."
 
-    summary = "\n".join(summary_parts)
-    log_activity("ai", f"[{agent_name}] Recherche abgeschlossen: {len(web_results)} Web + {len(scientific_results)} Paper", employee_id=employee.get("id"))
+    user_msg = f"""Aufgabe: {title}
+
+Ich habe folgende Quellen gefunden:
+
+{context}
+
+Bitte erstelle einen umfassenden Recherchebericht:
+1. Zusammenfassung der wichtigsten Erkenntnisse
+2. Analyse der Trends und Muster
+3. Bewertung der Quellen
+4. Konkrete Handlungsempfehlungen
+5. Offene Fragen und weitere Forschungsrichtungen"""
+
+    analysis = await think(system_prompt, user_msg)
+
+    log_activity("ai", f"[{agent_name}] Recherche abgeschlossen: {len(web_results)} Web + {len(scientific_results)} Paper",
+                 employee_id=employee.get("id"))
 
     return {
         "type": "research",
-        "summary": summary,
+        "summary": analysis,
         "web_results": web_results,
         "scientific_results": scientific_results,
         "sources_count": len(web_results) + len(scientific_results),
@@ -168,122 +271,140 @@ async def execute_research(title: str, employee: dict) -> dict:
 
 
 async def execute_code_generation(title: str, employee: dict) -> dict:
-    """Execute a code generation task"""
-    agent_name = employee.get("name", "Agent")
+    """NEXUS generates real, working code"""
+    agent_name = employee.get("name", "NEXUS")
+    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["NEXUS"])
     log_activity("ai", f"[{agent_name}] Starte Code-Generierung: {title[:80]}", employee_id=employee.get("id"))
 
-    # Detect language from prompt
-    title_lower = title.lower()
-    lang = "python"
-    if any(w in title_lower for w in ["typescript", "react", "next", "frontend", "component"]):
-        lang = "typescript"
-    elif any(w in title_lower for w in ["javascript", "node", "js"]):
-        lang = "javascript"
+    user_msg = f"""Aufgabe: {title}
 
-    result = await generate_code(title, lang)
+Bitte erstelle:
+1. Vollständigen, lauffähigen Code
+2. Kurze Erklärung der Architektur
+3. Installationsanweisungen (falls nötig)
+4. Beispiel-Nutzung
 
-    log_activity("ai", f"[{agent_name}] Code generiert ({lang}): {title[:60]}", employee_id=employee.get("id"))
+Schreibe echten, funktionierenden Code — keine Platzhalter oder TODOs."""
+
+    code_response = await think(system_prompt, user_msg)
+
+    log_activity("ai", f"[{agent_name}] Code generiert: {title[:60]}", employee_id=employee.get("id"))
+
     return {
         "type": "code_generation",
-        "summary": f"Code-Template generiert ({lang}).\n\n```{lang}\n{result['code'][:500]}\n```\n\n_{result['note']}_",
-        **result,
+        "summary": code_response,
     }
 
 
 async def execute_analysis(title: str, employee: dict) -> dict:
-    """Execute a data analysis task"""
-    agent_name = employee.get("name", "Agent")
+    """Data analysis with real system metrics + AI interpretation"""
+    agent_name = employee.get("name", "SCOUT")
+    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["SCOUT"])
     log_activity("ai", f"[{agent_name}] Starte Analyse: {title[:80]}", employee_id=employee.get("id"))
 
-    # Gather system data for analysis
+    # Gather real system data
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM tasks")
-    total_tasks = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM tasks WHERE status = 'completed'")
-    completed = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM projects")
-    projects = cur.fetchone()[0]
-    cur.execute("SELECT COALESCE(SUM(budget), 0), COALESCE(SUM(spent), 0) FROM projects")
-    budget_row = cur.fetchone()
-    cur.execute("SELECT COUNT(*) FROM activity_log WHERE created_at > NOW() - INTERVAL '24 hours'")
-    recent_activity = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*), COUNT(CASE WHEN status='completed' THEN 1 END), COUNT(CASE WHEN status='failed' THEN 1 END) FROM tasks")
+    task_stats = cur.fetchone()
+    cur.execute("SELECT COUNT(*), COALESCE(SUM(budget),0), COALESCE(SUM(spent),0) FROM projects")
+    proj_stats = cur.fetchone()
+    cur.execute("SELECT type, COUNT(*) FROM activity_log WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY type ORDER BY COUNT(*) DESC")
+    activity = cur.fetchall()
+    cur.execute("SELECT e.name, COUNT(t.id), COUNT(CASE WHEN t.status='completed' THEN 1 END) FROM employees e LEFT JOIN tasks t ON t.employee_id = e.id GROUP BY e.name")
+    agent_stats = cur.fetchall()
     cur.close()
     conn.close()
-
     gpu = check_gpu()
 
-    summary = f"""**System-Analyse: {title}**
+    data_context = f"""SYSTEM-DATEN:
 
-**Aufgaben-Statistik:**
-- Gesamt: {total_tasks} Tasks
-- Abgeschlossen: {completed} ({round(completed/max(total_tasks,1)*100)}%)
-- Offen: {total_tasks - completed}
+Tasks: {task_stats[0]} gesamt, {task_stats[1]} abgeschlossen, {task_stats[2]} fehlgeschlagen
+Projekte: {proj_stats[0]} Stück, Budget: {float(proj_stats[1]):,.2f}€, Ausgegeben: {float(proj_stats[2]):,.2f}€
 
-**Projekte:** {projects}
-**Budget:** {budget_row[0]:,.2f}€ (ausgegeben: {budget_row[1]:,.2f}€)
-**Aktivität (24h):** {recent_activity} Events
+Aktivität (24h): {', '.join(f'{a[0]}={a[1]}' for a in activity) if activity else 'Keine'}
 
-**GPU-Status:** {'✓ ' + gpu['device'] + ' (' + gpu['memory'] + ')' if gpu['available'] else '✗ Keine GPU verfügbar'}
+Agenten-Auslastung:
+{chr(10).join(f'- {a[0]}: {a[1]} Tasks ({a[2]} fertig)' for a in agent_stats)}
 
-**Empfehlung:** {'Alle Systeme laufen optimal.' if completed > 0 else 'Noch keine Tasks abgeschlossen — Agenten sind bereit für Aufgaben.'}"""
+GPU: {gpu['device'] if gpu['available'] else 'Nicht verfügbar'} ({gpu.get('memory', 'N/A')})"""
+
+    user_msg = f"""Aufgabe: {title}
+
+{data_context}
+
+Bitte erstelle eine detaillierte Analyse mit:
+1. Aktuelle Systemleistung
+2. Engpässe und Optimierungspotenzial
+3. Trend-Analyse
+4. Konkrete Empfehlungen"""
+
+    analysis = await think(system_prompt, user_msg)
 
     log_activity("ai", f"[{agent_name}] Analyse abgeschlossen", employee_id=employee.get("id"))
-    return {"type": "analysis", "summary": summary}
+    return {"type": "analysis", "summary": analysis}
 
 
 async def execute_finance(title: str, employee: dict) -> dict:
-    """Execute a finance task"""
-    agent_name = employee.get("name", "Agent")
+    """VAULT creates real financial analysis"""
+    agent_name = employee.get("name", "VAULT")
+    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["VAULT"])
     log_activity("ai", f"[{agent_name}] Starte Finanz-Aufgabe: {title[:80]}", employee_id=employee.get("id"))
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT name, budget, spent, status FROM projects ORDER BY budget DESC")
+    cur.execute("SELECT name, budget, spent, status, config FROM projects ORDER BY budget DESC")
     projects = cur.fetchall()
-    cur.execute("SELECT type, COALESCE(SUM((value)::numeric), 0) FROM assets GROUP BY type")
+    cur.execute("SELECT type, name, value FROM assets ORDER BY value DESC")
     assets = cur.fetchall()
+    cur.execute("SELECT COUNT(*) FROM tasks WHERE status = 'completed'")
+    completed_tasks = cur.fetchone()[0]
     cur.close()
     conn.close()
 
-    lines = [f"**Finanzbericht: {title}**\n"]
-    total_budget = 0
-    total_spent = 0
+    finance_context = f"""FINANZDATEN:
 
-    if projects:
-        lines.append("**Projekte:**")
-        for p in projects:
-            total_budget += float(p[1] or 0)
-            total_spent += float(p[2] or 0)
-            usage = round(float(p[2] or 0) / max(float(p[1] or 1), 1) * 100)
-            lines.append(f"- {p[0]}: {float(p[1] or 0):,.2f}€ Budget, {float(p[2] or 0):,.2f}€ ausgegeben ({usage}%) [{p[3]}]")
+Projekte:
+{chr(10).join(f'- {p[0]}: Budget {float(p[1] or 0):,.2f}€, Ausgegeben {float(p[2] or 0):,.2f}€ ({p[3]})' for p in projects)}
 
-    lines.append(f"\n**Gesamt:** {total_budget:,.2f}€ Budget, {total_spent:,.2f}€ ausgegeben")
-    lines.append(f"**Verfügbar:** {total_budget - total_spent:,.2f}€")
+Assets:
+{chr(10).join(f'- [{a[0]}] {a[1]}: {float(a[2]):,.2f}€' for a in assets) if assets else 'Keine Assets vorhanden'}
 
-    if assets:
-        lines.append("\n**Assets nach Typ:**")
-        for a in assets:
-            lines.append(f"- {a[0]}: {float(a[1]):,.2f}€")
+Abgeschlossene Tasks: {completed_tasks}
+Gesamtbudget: {sum(float(p[1] or 0) for p in projects):,.2f}€
+Gesamtausgaben: {sum(float(p[2] or 0) for p in projects):,.2f}€"""
 
-    summary = "\n".join(lines)
+    user_msg = f"""Aufgabe: {title}
+
+{finance_context}
+
+Erstelle eine detaillierte Finanzanalyse mit:
+1. Budget-Übersicht und Auslastung
+2. Kosten-Nutzen-Analyse pro Projekt
+3. ROI-Prognose
+4. Risikobewertung
+5. Optimierungsvorschläge"""
+
+    analysis = await think(system_prompt, user_msg)
+
     log_activity("ai", f"[{agent_name}] Finanzbericht erstellt", employee_id=employee.get("id"))
-    return {"type": "finance", "summary": summary}
+    return {"type": "finance", "summary": analysis}
 
 
 async def execute_ml_training(title: str, employee: dict) -> dict:
-    """Execute an ML/GPU task"""
-    agent_name = employee.get("name", "Agent")
+    """FORGE handles ML tasks with real GPU operations"""
+    agent_name = employee.get("name", "FORGE")
+    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["FORGE"])
     gpu = check_gpu()
-    log_activity("ai", f"[{agent_name}] Starte ML-Aufgabe: {title[:80]} (GPU: {gpu['available']})", employee_id=employee.get("id"))
+    log_activity("ai", f"[{agent_name}] Starte ML-Aufgabe: {title[:80]}", employee_id=employee.get("id"))
 
+    # Run real GPU benchmark
+    bench_results = "GPU nicht verfügbar."
     if gpu["available"]:
         import torch
         device = torch.device("cuda")
-        # Run a benchmark
-        sizes = [512, 1024, 2048]
-        results = []
-        for s in sizes:
+        benchmarks = []
+        for s in [512, 1024, 2048]:
             start = datetime.now()
             a = torch.randn(s, s, device=device)
             b = torch.randn(s, s, device=device)
@@ -291,96 +412,98 @@ async def execute_ml_training(title: str, employee: dict) -> dict:
             torch.cuda.synchronize()
             elapsed = (datetime.now() - start).total_seconds()
             gflops = (2 * s**3) / elapsed / 1e9
-            results.append(f"- {s}x{s} Matmul: {elapsed*1000:.1f}ms ({gflops:.1f} GFLOPS)")
-
+            benchmarks.append(f"- {s}x{s}: {elapsed*1000:.1f}ms ({gflops:.1f} GFLOPS)")
         mem_used = torch.cuda.memory_allocated() / 1e6
         mem_total = torch.cuda.get_device_properties(0).total_memory / 1e6
+        bench_results = f"""GPU: {gpu['device']} ({gpu['memory']})
+CUDA: {gpu['cuda_version']}
+VRAM: {mem_used:.0f}MB / {mem_total:.0f}MB
 
-        summary = f"""**ML-Aufgabe: {title}**
+Benchmarks:
+{chr(10).join(benchmarks)}"""
 
-**GPU:** {gpu['device']} ({gpu['memory']})
-**CUDA:** {gpu['cuda_version']}
+    engine_status = get_engine_status()
 
-**Benchmark-Ergebnisse:**
-{chr(10).join(results)}
+    user_msg = f"""Aufgabe: {title}
 
-**VRAM:** {mem_used:.0f} MB / {mem_total:.0f} MB verwendet
+HARDWARE-INFO:
+{bench_results}
 
-**Status:** GPU ist bereit für Training. Für echtes Model-Training wird ein Dataset und Trainingsconfig benötigt."""
-    else:
-        summary = f"""**ML-Aufgabe: {title}**
+AI-Engine Status:
+{json.dumps(engine_status, indent=2)}
 
-**GPU:** Nicht verfügbar (CPU-Modus)
+Bitte erstelle basierend auf der Aufgabe:
+1. Technische Analyse und Empfehlung
+2. Konkreter Implementierungsvorschlag (mit Code falls relevant)
+3. Ressourcen-Abschätzung (VRAM, Trainingszeit)
+4. Geeignete Modelle/Architekturen für 8GB VRAM"""
 
-Die GPU ist aktuell nicht erreichbar. ML-Tasks können im CPU-Modus ausgeführt werden, sind aber deutlich langsamer.
-
-**Empfehlung:** NVIDIA Container Toolkit prüfen und Container mit GPU-Zugriff neustarten."""
+    analysis = await think(system_prompt, user_msg)
 
     log_activity("ai", f"[{agent_name}] ML-Aufgabe abgeschlossen", employee_id=employee.get("id"))
-    return {"type": "ml_training", "summary": summary, "gpu": gpu}
+    return {"type": "ml_training", "summary": analysis, "gpu": gpu, "benchmark": bench_results}
 
 
 async def execute_planning(title: str, employee: dict) -> dict:
-    """Execute a planning/management task"""
-    agent_name = employee.get("name", "Agent")
+    """ARIA creates real strategic plans"""
+    agent_name = employee.get("name", "ARIA")
+    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["ARIA"])
     log_activity("ai", f"[{agent_name}] Starte Planung: {title[:80]}", employee_id=employee.get("id"))
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT name, role, department FROM employees WHERE status = 'active'")
+    cur.execute("SELECT e.name, e.role, e.department, COUNT(t.id), COUNT(CASE WHEN t.status IN ('pending','running') THEN 1 END) FROM employees e LEFT JOIN tasks t ON t.employee_id = e.id GROUP BY e.name, e.role, e.department")
     team = cur.fetchall()
-    cur.execute("SELECT title, status, employee_id FROM tasks WHERE status != 'completed' ORDER BY priority LIMIT 10")
+    cur.execute("SELECT title, status, employee_id FROM tasks WHERE status NOT IN ('completed', 'failed') ORDER BY priority LIMIT 10")
     open_tasks = cur.fetchall()
-    cur.execute("SELECT name, status FROM projects")
+    cur.execute("SELECT name, status, description FROM projects WHERE status = 'active'")
     projects = cur.fetchall()
     cur.close()
     conn.close()
 
-    lines = [f"**Planung: {title}**\n"]
-    lines.append(f"**Team ({len(team)} Agenten):**")
-    for t in team:
-        lines.append(f"- {t[0]} ({t[1]}, {t[2]})")
+    context = f"""TEAM-STATUS:
+{chr(10).join(f'- {t[0]} ({t[1]}, {t[2]}): {t[3]} Tasks total, {t[4]} offen' for t in team)}
 
-    if open_tasks:
-        lines.append(f"\n**Offene Tasks ({len(open_tasks)}):**")
-        for t in open_tasks:
-            lines.append(f"- [{t[1]}] {t[0]}")
-    else:
-        lines.append("\n**Keine offenen Tasks.** Alle Agenten sind verfügbar.")
+OFFENE TASKS: {len(open_tasks)}
+{chr(10).join(f'- [{t[1]}] {t[0]}' for t in open_tasks) if open_tasks else 'Keine offenen Tasks'}
 
-    if projects:
-        lines.append(f"\n**Projekte ({len(projects)}):**")
-        for p in projects:
-            lines.append(f"- {p[0]} [{p[1]}]")
+AKTIVE PROJEKTE:
+{chr(10).join(f'- {p[0]} [{p[1]}]: {(p[2] or "")[:100]}' for p in projects) if projects else 'Keine aktiven Projekte'}"""
 
-    lines.append(f"\n**Nächste Schritte:** Aufgabe analysiert. Delegierung an spezialisierte Agenten empfohlen.")
+    user_msg = f"""Aufgabe: {title}
 
-    summary = "\n".join(lines)
+{context}
+
+Erstelle einen detaillierten Plan mit:
+1. Situationsanalyse
+2. Priorisierung der nächsten Schritte
+3. Ressourcenzuweisung an Teammitglieder
+4. Zeitliche Meilensteine
+5. Risiken und Gegenmaßnahmen"""
+
+    plan = await think(system_prompt, user_msg)
+
     log_activity("ai", f"[{agent_name}] Planung abgeschlossen", employee_id=employee.get("id"))
-    return {"type": "planning", "summary": summary}
+    return {"type": "planning", "summary": plan}
 
 
 async def execute_general(title: str, employee: dict) -> dict:
-    """Fallback for general tasks"""
+    """General task handling with AI"""
     agent_name = employee.get("name", "Agent")
+    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS.get("ARIA"))
     log_activity("ai", f"[{agent_name}] Bearbeite Aufgabe: {title[:80]}", employee_id=employee.get("id"))
 
-    summary = f"""**Aufgabe: {title}**
+    user_msg = f"""Aufgabe: {title}
 
-Agent **{agent_name}** ({employee.get('role', 'Agent')}) hat die Aufgabe analysiert.
+Bearbeite diese Aufgabe vollständig und gib ein detailliertes Ergebnis zurück."""
 
-**Ergebnis:** Die Aufgabe wurde entgegengenommen und verarbeitet. Für komplexere Ergebnisse empfehle ich:
-- Recherche-Aufgaben an **SCOUT** (Research)
-- Code-Aufgaben an **NEXUS** (Engineering)
-- ML/Training an **FORGE** (AI Lab)
-- Finanzen an **VAULT** (Finance)
-- Strategie/Planung an **ARIA** (Management)"""
+    result = await think(system_prompt, user_msg)
 
     log_activity("ai", f"[{agent_name}] Aufgabe abgeschlossen: {title[:60]}", employee_id=employee.get("id"))
-    return {"type": "general", "summary": summary}
+    return {"type": "general", "summary": result}
 
 
-# Task execution dispatcher
+# Task dispatcher
 TASK_EXECUTORS = {
     "research": execute_research,
     "code_generation": execute_code_generation,
@@ -392,15 +515,31 @@ TASK_EXECUTORS = {
 }
 
 
+# ─── API Endpoints ────────────────────────────────────────────────
+
 @app.get("/health")
 async def health():
     gpu = check_gpu()
-    return {"status": "ok", "gpu": gpu, "timestamp": datetime.now().isoformat()}
+    engine = get_engine_status()
+    return {"status": "ok", "gpu": gpu, "ai_engine": engine, "timestamp": datetime.now().isoformat()}
 
 
 @app.get("/gpu")
 async def gpu_status():
     return check_gpu()
+
+
+@app.get("/ai-status")
+async def ai_status():
+    """Get AI engine status"""
+    return get_engine_status()
+
+
+@app.post("/ai/preload")
+async def preload_model(background_tasks: BackgroundTasks):
+    """Preload the local model into GPU memory"""
+    background_tasks.add_task(asyncio.to_thread, load_local_model)
+    return {"status": "loading", "model": os.environ.get("LOCAL_MODEL", "Qwen/Qwen2.5-3B-Instruct")}
 
 
 @app.post("/run")
@@ -409,7 +548,6 @@ async def run_experiment(req: RunRequest, background_tasks: BackgroundTasks):
     log_activity("ai", f"Worker: Experiment gestartet - {req.prompt[:80]}")
 
     gpu = check_gpu()
-
     if req.type == "experiment":
         background_tasks.add_task(process_experiment, req)
         return {
@@ -417,14 +555,10 @@ async def run_experiment(req: RunRequest, background_tasks: BackgroundTasks):
                       f"Prompt: {req.prompt[:100]}\n"
                       f"Status: In Verarbeitung..."
         }
-
     return {"result": "Unbekannter Experimenttyp"}
 
 
 async def process_experiment(req: RunRequest):
-    """Process an experiment in the background"""
-    logger.info(f"Processing experiment: {req.prompt[:50]}")
-
     try:
         gpu = check_gpu()
         if gpu["available"]:
@@ -434,11 +568,9 @@ async def process_experiment(req: RunRequest):
             result = torch.matmul(tensor, tensor.T)
             log_activity("ai", f"GPU Experiment abgeschlossen. Matrix: {result.shape}, Device: {device}")
         else:
-            log_activity("ai", f"CPU Experiment abgeschlossen (keine GPU verfügbar)")
-
+            log_activity("ai", "CPU Experiment abgeschlossen (keine GPU verfügbar)")
     except Exception as e:
         log_activity("error", f"Experiment fehlgeschlagen: {str(e)}")
-        logger.error(f"Experiment error: {e}")
 
 
 @app.post("/task")
@@ -449,13 +581,12 @@ async def process_task(req: TaskRequest, background_tasks: BackgroundTasks):
 
 
 async def execute_task(req: TaskRequest):
-    """Execute a task in the background using the appropriate agent"""
+    """Execute a task using the appropriate AI agent"""
     conn = None
     try:
         conn = get_db()
         cur = conn.cursor()
 
-        # Get task details
         cur.execute("SELECT title, description, project_id, employee_id FROM tasks WHERE id = %s", (req.task_id,))
         task_row = cur.fetchone()
         if not task_row:
@@ -465,25 +596,26 @@ async def execute_task(req: TaskRequest):
         title, description, project_id, employee_id = task_row
         employee_id = employee_id or req.employee_id
 
-        # Mark as running
         cur.execute("UPDATE tasks SET status = 'running', started_at = NOW() WHERE id = %s", (req.task_id,))
         conn.commit()
 
         log_activity("task", f"Task #{req.task_id} gestartet: {title[:80]}", project_id=project_id, employee_id=employee_id)
 
-        # Get employee info for routing
         employee = get_employee_info(employee_id) if employee_id else {}
 
-        # Classify and execute
+        # If there's a description, append it to the title for richer context
+        full_title = title
+        if description:
+            full_title = f"{title}\n\nDetails: {description}"
+
         task_type = classify_task(title, employee)
         executor = TASK_EXECUTORS.get(task_type, execute_general)
 
-        logger.info(f"Task #{req.task_id} classified as '{task_type}', executing with {executor.__name__}")
+        logger.info(f"Task #{req.task_id} classified as '{task_type}', agent: {employee.get('name', '?')}")
 
-        result = await executor(title, employee)
+        result = await executor(full_title, employee)
         result["task_type"] = task_type
 
-        # Save result
         cur.execute(
             "UPDATE tasks SET status = 'completed', completed_at = NOW(), result = %s WHERE id = %s",
             (json.dumps(result), req.task_id)
@@ -509,136 +641,22 @@ async def execute_task(req: TaskRequest):
                 pass
 
 
-class CoordinateRequest(BaseModel):
-    project_id: int
-
-
-# Agent-to-employee mapping
-AGENT_ROLES = {
-    "research": {"name": "SCOUT", "id": 3},
-    "code_generation": {"name": "NEXUS", "id": 2},
-    "analysis": {"name": "SCOUT", "id": 3},
-    "finance": {"name": "VAULT", "id": 5},
-    "ml_training": {"name": "FORGE", "id": 4},
-    "planning": {"name": "ARIA", "id": 1},
-    "general": {"name": "NEXUS", "id": 2},
-}
-
-
-def generate_project_tasks(name: str, description: str, config: dict) -> list:
-    """ARIA analyzes a project and generates task breakdown"""
-    desc_lower = (name + " " + description).lower()
-    tasks = []
-
-    # Always start with research
-    tasks.append({
-        "title": f"Recherche: Marktanalyse und Stand der Technik für '{name}'",
-        "agent": "research",
-        "priority": 1,
-        "description": f"Umfassende Recherche zu: {description[:200]}",
-    })
-
-    # Finance/budget tasks if budget mentioned or > 0
-    if any(w in desc_lower for w in ["budget", "geld", "kosten", "invest", "€", "euro", "finanz", "profit", "umsatz"]):
-        tasks.append({
-            "title": f"Finanzplanung und Budgetierung für '{name}'",
-            "agent": "finance",
-            "priority": 2,
-            "description": f"Erstelle Finanzplan und Budget-Breakdown für das Projekt",
-        })
-
-    # Code/development tasks
-    if any(w in desc_lower for w in ["app", "software", "plattform", "website", "tool", "system", "api",
-                                       "develop", "code", "programm", "build", "erstell", "automat"]):
-        tasks.append({
-            "title": f"Technische Architektur und Implementierungsplan für '{name}'",
-            "agent": "code_generation",
-            "priority": 3,
-            "description": f"Entwerfe die technische Architektur und erstelle einen Implementierungsplan",
-        })
-
-    # ML/AI tasks
-    if any(w in desc_lower for w in ["ki", "ai", "model", "train", "neural", "machine learning",
-                                       "ml", "deep learning", "gpu", "prediction", "klassifik"]):
-        tasks.append({
-            "title": f"ML-Konzept und Modellauswahl für '{name}'",
-            "agent": "ml_training",
-            "priority": 3,
-            "description": f"Evaluiere geeignete ML-Modelle und erstelle ein Trainingskonzept",
-        })
-
-    # Data/analysis tasks
-    if any(w in desc_lower for w in ["daten", "data", "analys", "statistik", "auswert", "monitor", "track"]):
-        tasks.append({
-            "title": f"Datenanalyse und Metriken-Definition für '{name}'",
-            "agent": "analysis",
-            "priority": 3,
-            "description": f"Definiere relevante Metriken und erstelle Analyse-Framework",
-        })
-
-    # Content/creative tasks
-    if any(w in desc_lower for w in ["content", "text", "bild", "video", "kreativ", "design", "marketing"]):
-        tasks.append({
-            "title": f"Content-Strategie und Erstellung für '{name}'",
-            "agent": "research",
-            "priority": 4,
-            "description": f"Entwickle Content-Strategie und erstelle erste Inhalte",
-        })
-
-    # Strategy tasks from config
-    if config:
-        strategies = config.get("strategies", [])
-        for strat in strategies[:3]:  # max 3 strategy tasks
-            strat_name = strat.replace("_", " ").title()
-            tasks.append({
-                "title": f"Strategie umsetzen: {strat_name} für '{name}'",
-                "agent": "planning" if "manage" in strat else "research",
-                "priority": 4,
-                "description": f"Implementiere die Strategie '{strat_name}' im Rahmen des Projekts",
-            })
-
-    # If no specific tasks were generated (besides research), add general ones
-    if len(tasks) <= 1:
-        tasks.append({
-            "title": f"Detailplanung und Meilensteine für '{name}'",
-            "agent": "planning",
-            "priority": 2,
-            "description": f"Erstelle detaillierten Projektplan mit Meilensteinen",
-        })
-        tasks.append({
-            "title": f"Ressourcen-Analyse für '{name}'",
-            "agent": "analysis",
-            "priority": 3,
-            "description": f"Analysiere benötigte Ressourcen und erstelle Zeitplan",
-        })
-
-    # Always end with a summary/coordination task
-    tasks.append({
-        "title": f"Projektkoordination: Zusammenfassung und nächste Schritte für '{name}'",
-        "agent": "planning",
-        "priority": 10,
-        "description": f"Fasse alle Teilergebnisse zusammen und definiere die nächsten Schritte",
-    })
-
-    return tasks
-
+# ─── Project Coordination (ARIA) ─────────────────────────────────
 
 @app.post("/coordinate")
 async def coordinate_project(req: CoordinateRequest, background_tasks: BackgroundTasks):
-    """ARIA coordinates a project: analyzes it, creates tasks, delegates to team"""
     logger.info(f"Coordination requested for project {req.project_id}")
     background_tasks.add_task(execute_coordination, req.project_id)
     return {"status": "coordinating", "project_id": req.project_id}
 
 
 async def execute_coordination(project_id: int):
-    """ARIA's coordination logic: break project into tasks and delegate"""
+    """ARIA intelligently coordinates a project using AI"""
     conn = None
     try:
         conn = get_db()
         cur = conn.cursor()
 
-        # Get project details
         cur.execute("SELECT id, name, description, config, budget FROM projects WHERE id = %s", (project_id,))
         project = cur.fetchone()
         if not project:
@@ -650,63 +668,90 @@ async def execute_coordination(project_id: int):
             p_config = json.loads(p_config)
         p_config = p_config or {}
 
-        # ARIA starts coordination
-        aria_id = 1  # ARIA's employee_id
+        aria_id = 1
         log_activity("ai", f"[ARIA] Übernehme Projektkoordination für '{p_name}'", project_id=p_id, employee_id=aria_id)
 
-        # Update project status to active
         cur.execute("UPDATE projects SET status = 'active', updated_at = NOW() WHERE id = %s", (p_id,))
         conn.commit()
 
-        # Generate task breakdown
-        task_list = generate_project_tasks(p_name, p_desc or "", p_config)
+        # ARIA uses AI to plan the project
+        user_msg = f"""Analysiere dieses Projekt und erstelle einen Task-Breakdown.
 
-        log_activity("ai", f"[ARIA] Projektanalyse abgeschlossen: {len(task_list)} Aufgaben identifiziert für '{p_name}'",
+PROJEKT: {p_name}
+BESCHREIBUNG: {p_desc or 'Keine Beschreibung'}
+BUDGET: {float(p_budget or 0):,.2f}€
+CONFIG: {json.dumps(p_config) if p_config else 'Keine'}
+
+Erstelle eine Liste von 4-8 konkreten Aufgaben. Jede Aufgabe braucht:
+- title: Klarer, spezifischer Aufgabentitel
+- agent: Wer soll es machen (NEXUS, SCOUT, FORGE, VAULT, oder ARIA)
+- priority: 1-10 (1 = höchste Priorität)
+- description: Detaillierte Beschreibung was genau zu tun ist
+
+Antworte als JSON-Array:
+[{{"title": "...", "agent": "SCOUT", "priority": 1, "description": "..."}}]"""
+
+        task_plan = await think_structured(AGENT_PROMPTS["ARIA"], user_msg)
+
+        # Parse the task list
+        if isinstance(task_plan, dict) and "raw_response" in task_plan:
+            # AI couldn't produce JSON, use fallback
+            task_list = generate_fallback_tasks(p_name, p_desc or "", p_config)
+        elif isinstance(task_plan, list):
+            task_list = task_plan
+        elif isinstance(task_plan, dict) and "tasks" in task_plan:
+            task_list = task_plan["tasks"]
+        else:
+            task_list = generate_fallback_tasks(p_name, p_desc or "", p_config)
+
+        # Validate and sanitize tasks
+        valid_agents = {"ARIA", "NEXUS", "SCOUT", "FORGE", "VAULT"}
+        sanitized = []
+        for t in task_list:
+            if isinstance(t, dict) and "title" in t:
+                agent = t.get("agent", "SCOUT").upper()
+                if agent not in valid_agents:
+                    agent = "SCOUT"
+                sanitized.append({
+                    "title": str(t["title"])[:500],
+                    "agent": agent,
+                    "priority": min(max(int(t.get("priority", 5)), 1), 10),
+                    "description": str(t.get("description", ""))[:1000],
+                })
+
+        if not sanitized:
+            sanitized = generate_fallback_tasks(p_name, p_desc or "", p_config)
+
+        log_activity("ai", f"[ARIA] Projektanalyse abgeschlossen: {len(sanitized)} Aufgaben für '{p_name}'",
                      project_id=p_id, employee_id=aria_id)
 
-        # Create all tasks in DB and trigger execution
+        # Create tasks in DB
         created_tasks = []
-        for task_def in task_list:
-            agent_info = AGENT_ROLES.get(task_def["agent"], AGENT_ROLES["general"])
-
+        for task_def in sanitized:
+            agent_id = AGENT_IDS.get(task_def["agent"], 3)
             cur.execute(
                 "INSERT INTO tasks (project_id, employee_id, title, description, priority, status) VALUES (%s, %s, %s, %s, %s, 'pending') RETURNING id",
-                (p_id, agent_info["id"], task_def["title"], task_def.get("description", ""), task_def["priority"])
+                (p_id, agent_id, task_def["title"], task_def.get("description", ""), task_def["priority"])
             )
             task_id = cur.fetchone()[0]
             conn.commit()
-
-            created_tasks.append({
-                "task_id": task_id,
-                "title": task_def["title"],
-                "agent": agent_info["name"],
-                "priority": task_def["priority"],
-            })
-
-            log_activity("task",
-                         f"[ARIA] Aufgabe delegiert an {agent_info['name']}: {task_def['title'][:80]}",
+            created_tasks.append({"task_id": task_id, "agent": task_def["agent"], "priority": task_def["priority"]})
+            log_activity("task", f"[ARIA] → {task_def['agent']}: {task_def['title'][:80]}",
                          project_id=p_id, employee_id=aria_id)
 
         cur.close()
         conn.close()
 
-        # Now execute tasks sequentially by priority (lower = higher priority)
+        # Execute tasks by priority
         sorted_tasks = sorted(created_tasks, key=lambda t: t["priority"])
-
         for task_info in sorted_tasks:
             try:
-                req = TaskRequest(
-                    task_id=task_info["task_id"],
-                    action=task_info["title"],
-                    employee_id=AGENT_ROLES.get(task_info.get("agent_type", "general"), AGENT_ROLES["general"])["id"],
-                )
+                req = TaskRequest(task_id=task_info["task_id"], action="execute")
                 await execute_task(req)
             except Exception as e:
                 logger.error(f"Task {task_info['task_id']} execution error: {e}")
 
-        # Final summary
-        log_activity("ai",
-                     f"[ARIA] Projektkoordination abgeschlossen: {len(created_tasks)} Tasks für '{p_name}' erstellt und ausgeführt",
+        log_activity("ai", f"[ARIA] Projekt '{p_name}' koordiniert: {len(created_tasks)} Tasks abgeschlossen",
                      project_id=p_id, employee_id=aria_id)
 
     except Exception as e:
@@ -719,77 +764,77 @@ async def execute_coordination(project_id: int):
                 pass
 
 
+def generate_fallback_tasks(name: str, description: str, config: dict) -> list:
+    """Fallback when AI can't generate structured tasks"""
+    desc_lower = (name + " " + description).lower()
+    tasks = [
+        {"title": f"Marktrecherche und Analyse für '{name}'", "agent": "SCOUT", "priority": 1,
+         "description": f"Recherchiere Markt, Wettbewerb und Stand der Technik für: {description[:200]}"},
+    ]
+
+    if any(w in desc_lower for w in ["budget", "geld", "kosten", "invest", "€", "finanz"]):
+        tasks.append({"title": f"Finanzplanung für '{name}'", "agent": "VAULT", "priority": 2,
+                      "description": "Budget-Breakdown, ROI-Analyse und Kostenplanung"})
+
+    if any(w in desc_lower for w in ["app", "software", "code", "tool", "api", "system", "automat"]):
+        tasks.append({"title": f"Technische Implementierung für '{name}'", "agent": "NEXUS", "priority": 3,
+                      "description": "Architektur-Design und Code-Implementierung"})
+
+    if any(w in desc_lower for w in ["ki", "ai", "model", "train", "ml", "neural"]):
+        tasks.append({"title": f"ML-Konzept für '{name}'", "agent": "FORGE", "priority": 3,
+                      "description": "Modellauswahl, Trainingskonzept und GPU-Ressourcenplanung"})
+
+    tasks.append({"title": f"Zusammenfassung und nächste Schritte für '{name}'", "agent": "ARIA", "priority": 10,
+                  "description": "Alle Teilergebnisse zusammenfassen und Aktionsplan erstellen"})
+
+    return tasks
+
+
+# ─── Other Endpoints ──────────────────────────────────────────────
+
 @app.post("/research")
 async def web_research(query: dict, background_tasks: BackgroundTasks):
-    """Perform web research on a topic"""
     topic = query.get("topic", "")
     log_activity("ai", f"Web-Recherche gestartet: {topic[:80]}")
-
     web_results = await web_search(topic)
     scientific_results = await search_scientific(topic)
-
-    return {
-        "web_results": web_results,
-        "scientific_results": scientific_results,
-        "total": len(web_results) + len(scientific_results),
-    }
+    return {"web_results": web_results, "scientific_results": scientific_results,
+            "total": len(web_results) + len(scientific_results)}
 
 
-# GeldAlchemie Simulation
 @app.post("/geld-alchemie/simulate")
 async def simulate_geld_alchemie(params: dict):
-    """Simulate the 100€ to 100k€ growth strategies"""
     start_capital = params.get("start_capital", 100)
     target = params.get("target", 100000)
     weeks = params.get("weeks", 52)
     strategy = params.get("strategy", "compound")
 
     import numpy as np
-
     results = []
     capital = float(start_capital)
 
     for week in range(1, weeks + 1):
         if strategy == "compound":
-            growth_rate = np.random.normal(0.15, 0.08)
-            capital *= (1 + growth_rate)
+            capital *= (1 + np.random.normal(0.15, 0.08))
         elif strategy == "arbitrage":
-            trades = np.random.poisson(5)
-            for _ in range(trades):
-                profit = np.random.exponential(capital * 0.03)
-                capital += profit
+            for _ in range(np.random.poisson(5)):
+                capital += np.random.exponential(capital * 0.03)
         elif strategy == "content":
-            pieces = np.random.poisson(10)
-            revenue_per_piece = np.random.exponential(5)
-            capital += pieces * revenue_per_piece
+            capital += np.random.poisson(10) * np.random.exponential(5)
         elif strategy == "mixed":
             capital *= (1 + np.random.normal(0.08, 0.05))
             capital += np.random.poisson(3) * np.random.exponential(capital * 0.02)
             capital += np.random.poisson(5) * np.random.exponential(3)
 
         capital = max(capital, 0)
-        results.append({
-            "week": week,
-            "capital": round(capital, 2),
-            "target_pct": round((capital / target) * 100, 2),
-        })
-
+        results.append({"week": week, "capital": round(capital, 2), "target_pct": round((capital / target) * 100, 2)})
         if capital >= target:
             break
 
-    log_activity(
-        "finance",
-        f"GeldAlchemie Simulation: {start_capital}€ → {round(capital, 2)}€ in {len(results)} Wochen ({strategy})",
-        project_id=1
-    )
+    log_activity("finance", f"GeldAlchemie: {start_capital}€ → {round(capital, 2)}€ in {len(results)} Wochen ({strategy})", project_id=1)
 
-    return {
-        "results": results,
-        "final_capital": round(capital, 2),
-        "reached_target": capital >= target,
-        "weeks_needed": len(results),
-        "strategy": strategy,
-    }
+    return {"results": results, "final_capital": round(capital, 2),
+            "reached_target": capital >= target, "weeks_needed": len(results), "strategy": strategy}
 
 
 if __name__ == "__main__":

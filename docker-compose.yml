@@ -34,10 +34,15 @@ services:
       - REDIS_URL=redis://redis:6379
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LOCAL_MODEL=Qwen/Qwen2.5-3B-Instruct
+      - HF_HOME=/app/models
+      - TRANSFORMERS_CACHE=/app/models
     volumes:
       - ./worker:/app
       - worker-data:/app/data
       - app-logs:/app/logs
+      - model-cache:/app/models
     deploy:
       resources:
         reservations:
@@ -106,6 +111,7 @@ volumes:
   redis_data:
   worker-data:
   app-logs:
+  model-cache:
 
 networks:
   aicompany:
