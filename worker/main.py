@@ -37,7 +37,7 @@ def check_gpu():
             return {
                 "available": True,
                 "device": torch.cuda.get_device_name(0),
-                "memory": f"{torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB",
+                "memory": f"{torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB",
                 "cuda_version": torch.version.cuda,
             }
     except Exception:
@@ -294,7 +294,7 @@ async def execute_ml_training(title: str, employee: dict) -> dict:
             results.append(f"- {s}x{s} Matmul: {elapsed*1000:.1f}ms ({gflops:.1f} GFLOPS)")
 
         mem_used = torch.cuda.memory_allocated() / 1e6
-        mem_total = torch.cuda.get_device_properties(0).total_mem / 1e6
+        mem_total = torch.cuda.get_device_properties(0).total_memory / 1e6
 
         summary = f"""**ML-Aufgabe: {title}**
 
