@@ -4,13 +4,14 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "3002:3000"
+      - "${FRONTEND_PORT:-3002}:3000"
     environment:
-      - DATABASE_URL=postgresql://aicompany:aicompany@db:5432/aicompany
-      - REDIS_URL=redis://redis:6379
-      - WORKER_URL=http://worker:8080
-      - NEXT_PUBLIC_WS_URL=wss://aicompany.macherwerkstatt.cc
-      - NEXT_PUBLIC_APP_URL=https://aicompany.macherwerkstatt.cc
+      - DATABASE_URL=${DATABASE_URL:-postgresql://aicompany:aicompany@db:5432/aicompany}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - WORKER_URL=${WORKER_URL:-http://worker:8080}
+      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-wss://aicompany.macherwerkstatt.cc}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-https://aicompany.macherwerkstatt.cc}
+      - SESSION_SECRET=${SESSION_SECRET:-aicompany-secret-change-me}
     volumes:
       - ./frontend/src:/app/src
       - ./CHANGELOG.md:/app/CHANGELOG.md:ro
@@ -30,16 +31,18 @@ services:
       context: ./worker
       dockerfile: Dockerfile
     environment:
-      - DATABASE_URL=postgresql://aicompany:aicompany@db:5432/aicompany
-      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=${DATABASE_URL:-postgresql://aicompany:aicompany@db:5432/aicompany}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - LOCAL_MODEL=Qwen/Qwen2.5-3B-Instruct
+      - LOCAL_MODEL=${LOCAL_MODEL:-Qwen/Qwen2.5-3B-Instruct}
       - HF_HOME=/app/models
       - TRANSFORMERS_CACHE=/app/models
+      - SESSION_SECRET=${SESSION_SECRET:-aicompany-secret-change-me}
     volumes:
       - ./worker:/app
+      - ./frontend/src:/app/frontend-src
       - worker-data:/app/data
       - app-logs:/app/logs
       - model-cache:/app/models
@@ -62,14 +65,14 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      - POSTGRES_DB=aicompany
-      - POSTGRES_USER=aicompany
-      - POSTGRES_PASSWORD=aicompany
+      - POSTGRES_DB=${POSTGRES_DB:-aicompany}
+      - POSTGRES_USER=${POSTGRES_USER:-aicompany}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aicompany}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aicompany"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aicompany}"]
       interval: 5s
       timeout: 5s
       retries: 5

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
+import { AuthProvider } from '@/components/AuthProvider'
 
 export const metadata: Metadata = {
   title: 'AI Company',
@@ -32,7 +33,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="apple-touch-icon" href="/icon-192.png" />
       </head>
       <body className="min-h-screen bg-[var(--bg-primary)]">
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
         <script
           dangerouslySetInnerHTML={{
             __html: `

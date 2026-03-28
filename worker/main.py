@@ -15,6 +15,8 @@ import httpx
 
 from tasks.research import web_search, search_scientific
 from ai_engine import think, think_structured, get_engine_status, load_local_model
+from agents.memory import extract_and_store_learnings, get_relevant_memories, update_agent_metrics
+from agents.self_evolve import propose_change, apply_change, rollback_change, analyze_and_propose, read_file, list_files
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai-worker")
@@ -215,12 +217,29 @@ def classify_task(title: str, employee: dict) -> str:
     return dept_mapping.get(dept, "general")
 
 
+# ─── Memory-Enhanced Prompt Helper ───────────────────────────────
+
+def enrich_prompt_with_memory(system_prompt: str, employee: dict, title: str) -> str:
+    """Erweitert den System-Prompt mit relevanten Erinnerungen des Agenten."""
+    employee_id = employee.get("id")
+    if not employee_id:
+        return system_prompt
+    try:
+        memories = get_relevant_memories(employee_id, title, limit=5)
+        if memories:
+            memory_block = "\n\nERFAHRUNGEN AUS FRÜHEREN AUFGABEN:\n" + "\n".join(f"- {m}" for m in memories)
+            return system_prompt + memory_block
+    except Exception as e:
+        logger.error(f"Memory enrichment failed: {e}")
+    return system_prompt
+
+
 # ─── Task Executors (Real AI) ─────────────────────────────────────
 
 async def execute_research(title: str, employee: dict) -> dict:
     """SCOUT researches with real web data + AI analysis"""
     agent_name = employee.get("name", "SCOUT")
-    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["SCOUT"])
+    system_prompt = enrich_prompt_with_memory(AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["SCOUT"]), employee, title)
     log_activity("ai", f"[{agent_name}] Starte Recherche: {title[:80]}", employee_id=employee.get("id"))
 
     # Gather real web data
@@ -273,7 +292,7 @@ Bitte erstelle einen umfassenden Recherchebericht:
 async def execute_code_generation(title: str, employee: dict) -> dict:
     """NEXUS generates real, working code"""
     agent_name = employee.get("name", "NEXUS")
-    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["NEXUS"])
+    system_prompt = enrich_prompt_with_memory(AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["NEXUS"]), employee, title)
     log_activity("ai", f"[{agent_name}] Starte Code-Generierung: {title[:80]}", employee_id=employee.get("id"))
 
     user_msg = f"""Aufgabe: {title}
@@ -299,7 +318,7 @@ Schreibe echten, funktionierenden Code — keine Platzhalter oder TODOs."""
 async def execute_analysis(title: str, employee: dict) -> dict:
     """Data analysis with real system metrics + AI interpretation"""
     agent_name = employee.get("name", "SCOUT")
-    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["SCOUT"])
+    system_prompt = enrich_prompt_with_memory(AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["SCOUT"]), employee, title)
     log_activity("ai", f"[{agent_name}] Starte Analyse: {title[:80]}", employee_id=employee.get("id"))
 
     # Gather real system data
@@ -348,7 +367,7 @@ Bitte erstelle eine detaillierte Analyse mit:
 async def execute_finance(title: str, employee: dict) -> dict:
     """VAULT creates real financial analysis"""
     agent_name = employee.get("name", "VAULT")
-    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["VAULT"])
+    system_prompt = enrich_prompt_with_memory(AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["VAULT"]), employee, title)
     log_activity("ai", f"[{agent_name}] Starte Finanz-Aufgabe: {title[:80]}", employee_id=employee.get("id"))
 
     conn = get_db()
@@ -394,7 +413,7 @@ Erstelle eine detaillierte Finanzanalyse mit:
 async def execute_ml_training(title: str, employee: dict) -> dict:
     """FORGE handles ML tasks with real GPU operations"""
     agent_name = employee.get("name", "FORGE")
-    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["FORGE"])
+    system_prompt = enrich_prompt_with_memory(AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["FORGE"]), employee, title)
     gpu = check_gpu()
     log_activity("ai", f"[{agent_name}] Starte ML-Aufgabe: {title[:80]}", employee_id=employee.get("id"))
 
@@ -447,7 +466,7 @@ Bitte erstelle basierend auf der Aufgabe:
 async def execute_planning(title: str, employee: dict) -> dict:
     """ARIA creates real strategic plans"""
     agent_name = employee.get("name", "ARIA")
-    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["ARIA"])
+    system_prompt = enrich_prompt_with_memory(AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["ARIA"]), employee, title)
     log_activity("ai", f"[{agent_name}] Starte Planung: {title[:80]}", employee_id=employee.get("id"))
 
     conn = get_db()
@@ -490,7 +509,7 @@ Erstelle einen detaillierten Plan mit:
 async def execute_general(title: str, employee: dict) -> dict:
     """General task handling with AI"""
     agent_name = employee.get("name", "Agent")
-    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS.get("ARIA"))
+    system_prompt = enrich_prompt_with_memory(AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS.get("ARIA")), employee, title)
     log_activity("ai", f"[{agent_name}] Bearbeite Aufgabe: {title[:80]}", employee_id=employee.get("id"))
 
     user_msg = f"""Aufgabe: {title}
@@ -625,6 +644,15 @@ async def execute_task(req: TaskRequest):
         conn.close()
 
         log_activity("task", f"Task #{req.task_id} abgeschlossen ({task_type}): {title[:60]}", project_id=project_id, employee_id=employee_id)
+
+        # ─── Agent Memory: Learn from completed task ───
+        if employee_id:
+            try:
+                result_text = result.get("result", "") if isinstance(result, dict) else str(result)
+                extract_and_store_learnings(req.task_id, employee_id, title, result_text[:2000])
+                update_agent_metrics(employee_id)
+            except Exception as me:
+                logger.error(f"Memory extraction failed: {me}")
 
     except Exception as e:
         logger.error(f"Task error: {e}")
@@ -835,6 +863,74 @@ async def simulate_geld_alchemie(params: dict):
 
     return {"results": results, "final_capital": round(capital, 2),
             "reached_target": capital >= target, "weeks_needed": len(results), "strategy": strategy}
+
+
+# ─── Self-Evolution Endpoints ────────────────────────────────────
+
+class EvolveRequest(BaseModel):
+    file_path: str
+    description: str = ""
+    employee_id: int = 2  # NEXUS by default
+
+class ApproveRequest(BaseModel):
+    user_id: int
+
+
+@app.post("/evolve/propose")
+async def evolve_propose(req: EvolveRequest, background_tasks: BackgroundTasks):
+    """ARIA/NEXUS schlägt eine Code-Verbesserung vor."""
+    background_tasks.add_task(_do_propose, req.employee_id, req.file_path)
+    return {"status": "analyzing", "file": req.file_path}
+
+
+async def _do_propose(employee_id: int, file_path: str):
+    change_id = analyze_and_propose(employee_id, file_path)
+    if change_id:
+        log_activity("ai", f"Code-Verbesserung vorgeschlagen: {file_path}", employee_id=employee_id,
+                     details={"change_id": change_id})
+
+
+@app.post("/evolve/approve/{change_id}")
+async def evolve_approve(change_id: int, req: ApproveRequest):
+    """Admin genehmigt und wendet eine Änderung an."""
+    success = apply_change(change_id, req.user_id)
+    if success:
+        return {"status": "applied", "change_id": change_id}
+    return {"status": "failed", "change_id": change_id}
+
+
+@app.post("/evolve/rollback/{change_id}")
+async def evolve_rollback(change_id: int):
+    """Änderung zurücksetzen."""
+    success = rollback_change(change_id)
+    if success:
+        return {"status": "rolled_back", "change_id": change_id}
+    return {"status": "failed", "change_id": change_id}
+
+
+@app.get("/evolve/files")
+async def evolve_list_files(path: str = "/app/"):
+    """Dateien im Codebase auflisten."""
+    files = list_files(path)
+    return {"files": files, "count": len(files)}
+
+
+@app.get("/evolve/file")
+async def evolve_read_file(path: str):
+    """Einzelne Datei lesen."""
+    content = read_file(path)
+    if content is None:
+        return {"error": "Datei nicht gefunden oder nicht erlaubt"}
+    return {"path": path, "content": content, "lines": len(content.splitlines())}
+
+
+# ─── Memory Endpoints ────────────────────────────────────────────
+
+@app.get("/memory/{employee_id}")
+async def get_memories(employee_id: int):
+    """Erinnerungen eines Agenten abrufen."""
+    memories = get_relevant_memories(employee_id, "", limit=20)
+    return {"employee_id": employee_id, "memories": memories, "count": len(memories)}
 
 
 if __name__ == "__main__":

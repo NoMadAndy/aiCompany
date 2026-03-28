@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, FolderKanban, Users, Bot, FileText,
   ScrollText, Activity, Settings, ChevronLeft, ChevronRight,
-  Wallet, Beaker, Menu, X
+  Wallet, Beaker, Menu, X, GitBranch
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -17,6 +17,7 @@ const navItems = [
   { href: '/employees', label: 'Mitarbeiter', icon: Users },
   { href: '/finance', label: 'Finanzen', icon: Wallet },
   { href: '/lab', label: 'KI-Labor', icon: Beaker },
+  { href: '/evolution', label: 'Evolution', icon: GitBranch },
   { href: '/logs', label: 'Logs', icon: ScrollText },
   { href: '/changelog', label: 'Changelog', icon: FileText },
   { href: '/live', label: 'Live-View', icon: Activity },

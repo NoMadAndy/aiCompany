@@ -5,6 +5,48 @@ Alle wichtigen Änderungen an AI Company werden hier dokumentiert.
 Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.5.0] - 2026-03-28 — "Prometheus"
+
+### Hinzugefügt
+- **Login & Auth-System**: Session-basierte Authentifizierung mit Cookie-Sessions
+  - Login-Seite (`/login`) mit E-Mail + Passwort
+  - Auth-Middleware (`requireAuth`, `requireAdmin`) für geschützte Endpoints
+  - AuthProvider-Komponente mit automatischer Redirect-Logik
+  - AES-256-GCM-Verschlüsselung für API-Schlüssel
+- **Benutzerverwaltung** (Admin): Benutzer erstellen, bearbeiten, löschen
+  - Rollen: Admin, Manager, Betrachter
+  - Passwort-Hashing mit SHA-256 + Salt
+- **Einstellungsseite** komplett überarbeitet mit 4 Tabs:
+  - Allgemein (System-Info, Endpoints)
+  - API-Schlüssel (verschlüsselte Verwaltung)
+  - Benutzer (CRUD mit Rollenmanagement)
+  - System (Services, KI-Engine Status, .env Konfiguration)
+- **Agent-Memory-System**: Agenten lernen aus vergangenen Aufgaben
+  - Automatische Erkenntnis-Extraktion nach jeder abgeschlossenen Aufgabe
+  - Relevante Erinnerungen werden in System-Prompts injiziert
+  - Agenten-Metriken: Erfolgsrate, Lernfortschritt
+- **Self-Evolution-System**: AI Company kann eigenen Code verbessern
+  - Vorschlag-Genehmigung-Anwendung Pipeline
+  - Sicherheitsvalidierung: Nur erlaubte Pfade, keine Secrets
+  - Rollback-Möglichkeit für jede Änderung
+  - Evolution-Seite (`/evolution`) mit Diff-Ansicht und Memory-Browser
+- **.env-Konfigurationsdatei**: Alle Einstellungen zentral konfigurierbar
+  - Ports, Datenbank, Redis, API-Keys, Modelle
+  - Docker Compose referenziert `.env` mit Fallback-Defaults
+
+### Geändert
+- Docker Compose: Alle Werte über `${VAR:-default}` konfigurierbar
+- Worker: Frontend-Source als Volume gemountet für Self-Evolution
+- Sidebar: Neuer "Evolution"-Menüpunkt
+- Layout: AuthProvider umschließt alle Seiten
+
+### Datenbank
+- `sessions` Tabelle für Auth
+- `agent_memory` Tabelle für Lern-System
+- `agent_metrics` Tabelle für Erfolgsmetriken
+- `code_changes` Tabelle für Self-Evolution
+- `users` erweitert: `password_hash`, `api_keys`, `settings`, `last_login`
+
 ## [0.4.0] - 2026-03-27 — "Cortex"
 
 ### Hinzugefügt
