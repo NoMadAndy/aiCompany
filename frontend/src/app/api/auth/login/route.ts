@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { verifyPassword, hashPassword, createSession } from "@/lib/auth";
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
 
     response.cookies.set("session_id", sessionId, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: false, // Reverse proxy handles HTTPS termination
       sameSite: "lax",
       maxAge: 7 * 24 * 60 * 60,
       path: "/",

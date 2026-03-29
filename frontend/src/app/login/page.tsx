@@ -108,8 +108,17 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p className="text-center text-[var(--text-secondary)]/50 text-xs mt-6">
-          AI Company v0.4.0 &middot; Cortex
+        <div className="mt-4 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20 text-xs text-[var(--text-secondary)]">
+          <p className="font-medium text-indigo-400 mb-1">Standard-Zugangsdaten</p>
+          <p>E-Mail: <span className="font-mono text-[var(--text-primary)]">andy@macherwerkstatt.cc</span></p>
+          <p>Passwort: <span className="font-mono text-[var(--text-primary)]">admin</span></p>
+          <p className="mt-2 text-[var(--text-secondary)]/60">
+            Neue Benutzer können nur von einem Admin über Einstellungen → Benutzer angelegt werden.
+          </p>
+        </div>
+
+        <p className="text-center text-[var(--text-secondary)]/50 text-xs mt-4">
+          AI Company v0.5.0 &middot; Prometheus
         </p>
       </div>
     </div>
