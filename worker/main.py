@@ -534,6 +534,175 @@ TASK_EXECUTORS = {
 }
 
 
+# ─── Summary Generation ──────────────────────────────────────────
+
+async def generate_task_summary(task_id: int, title: str, result: dict, employee: dict, project_id: int = None):
+    """Generiert eine Zusammenfassung nach Task-Abschluss."""
+    agent_name = employee.get("name", "Agent")
+    result_text = result.get("summary", "")[:3000]
+    task_type = result.get("task_type", result.get("type", "general"))
+
+    prompt = f"""Erstelle eine kurze, strukturierte Zusammenfassung für diese abgeschlossene Aufgabe.
+
+AUFGABE: {title}
+AGENT: {agent_name}
+TYP: {task_type}
+
+ERGEBNIS:
+{result_text}
+
+Antworte als JSON:
+{{
+  "title": "Kurzer Titel der Zusammenfassung",
+  "content": "2-4 Sätze die das Ergebnis zusammenfassen",
+  "highlights": ["Wichtigstes Ergebnis 1", "Wichtigstes Ergebnis 2", "Wichtigstes Ergebnis 3"],
+  "metrics": {{"qualitaet": "hoch/mittel/niedrig", "vollstaendigkeit": "100%"}},
+  "recommendations": ["Nächster Schritt 1", "Nächster Schritt 2"]
+}}"""
+
+    try:
+        summary_data = await think_structured(AGENT_PROMPTS["ARIA"], prompt)
+
+        if isinstance(summary_data, dict) and "raw_response" not in summary_data:
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute(
+                """INSERT INTO summaries (project_id, task_id, type, title, content, highlights, metrics, recommendations, agent_contributions, generated_by)
+                   VALUES (%s, %s, 'task', %s, %s, %s, %s, %s, %s, 1)""",
+                (
+                    project_id, task_id,
+                    summary_data.get("title", f"Zusammenfassung: {title[:80]}"),
+                    summary_data.get("content", result_text[:500]),
+                    json.dumps(summary_data.get("highlights", [])),
+                    json.dumps(summary_data.get("metrics", {})),
+                    json.dumps(summary_data.get("recommendations", [])),
+                    json.dumps([{"agent": agent_name, "task_type": task_type}]),
+                )
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            log_activity("ai", f"[ARIA] Task-Zusammenfassung erstellt: {title[:60]}", project_id=project_id, employee_id=1)
+    except Exception as e:
+        logger.error(f"Task summary generation failed: {e}")
+
+
+async def generate_project_summary(project_id: int, project_name: str, project_desc: str, task_infos: list):
+    """ARIA erstellt eine Gesamtzusammenfassung nach Projekt-Koordination."""
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Alle Task-Ergebnisse sammeln
+    cur.execute(
+        """SELECT t.title, t.status, t.result, e.name as agent_name, t.started_at, t.completed_at
+           FROM tasks t LEFT JOIN employees e ON t.employee_id = e.id
+           WHERE t.project_id = %s ORDER BY t.priority, t.id""",
+        (project_id,)
+    )
+    tasks = cur.fetchall()
+
+    # Zusammenfassung der Ergebnisse bauen
+    task_summaries = []
+    agent_contributions = []
+    completed = 0
+    failed = 0
+
+    for t in tasks:
+        t_title, t_status, t_result, t_agent, t_started, t_completed = t
+        if t_status == "completed":
+            completed += 1
+        elif t_status == "failed":
+            failed += 1
+
+        result_data = t_result if isinstance(t_result, dict) else {}
+        if isinstance(t_result, str):
+            try:
+                result_data = json.loads(t_result)
+            except Exception:
+                result_data = {}
+
+        summary_text = result_data.get("summary", "")[:500]
+        task_type = result_data.get("task_type", result_data.get("type", "general"))
+
+        task_summaries.append(f"- [{t_status.upper()}] {t_agent or 'Agent'} → {t_title}: {summary_text[:200]}")
+        agent_contributions.append({
+            "agent": t_agent or "Agent",
+            "task": t_title,
+            "task_type": task_type,
+            "status": t_status,
+        })
+
+    cur.close()
+    conn.close()
+
+    tasks_overview = "\n".join(task_summaries) if task_summaries else "Keine Tasks ausgeführt."
+
+    prompt = f"""Du bist ARIA und hast gerade ein Projekt koordiniert. Erstelle einen umfassenden Abschlussbericht.
+
+PROJEKT: {project_name}
+BESCHREIBUNG: {project_desc}
+ERGEBNISSE ({completed} abgeschlossen, {failed} fehlgeschlagen):
+
+{tasks_overview}
+
+Erstelle einen strukturierten Bericht als JSON:
+{{
+  "title": "Projektbericht: {project_name}",
+  "content": "Ausführliche Zusammenfassung des Projekts (3-5 Absätze, Markdown erlaubt)",
+  "highlights": ["Wichtigstes Ergebnis 1", "Wichtigstes Ergebnis 2", "Wichtigstes Ergebnis 3"],
+  "metrics": {{
+    "tasks_total": {len(tasks)},
+    "tasks_completed": {completed},
+    "tasks_failed": {failed},
+    "erfolgsquote": "{round(completed / max(len(tasks), 1) * 100)}%",
+    "beteiligte_agenten": {len(set(c['agent'] for c in agent_contributions))}
+  }},
+  "recommendations": ["Empfehlung 1", "Empfehlung 2", "Empfehlung 3"]
+}}"""
+
+    try:
+        summary_data = await think_structured(AGENT_PROMPTS["ARIA"], prompt)
+
+        # Fallback wenn AI kein JSON liefert
+        if isinstance(summary_data, dict) and "raw_response" in summary_data:
+            raw = summary_data["raw_response"]
+            summary_data = {
+                "title": f"Projektbericht: {project_name}",
+                "content": raw[:2000] if raw else f"Projekt '{project_name}' wurde mit {completed}/{len(tasks)} Tasks abgeschlossen.",
+                "highlights": [f"{completed} von {len(tasks)} Tasks erfolgreich", f"{len(set(c['agent'] for c in agent_contributions))} Agenten beteiligt"],
+                "metrics": {"tasks_total": len(tasks), "tasks_completed": completed, "tasks_failed": failed},
+                "recommendations": [],
+            }
+
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO summaries (project_id, type, title, content, highlights, metrics, recommendations, agent_contributions, generated_by)
+               VALUES (%s, 'project', %s, %s, %s, %s, %s, %s, 1) RETURNING id""",
+            (
+                project_id,
+                summary_data.get("title", f"Projektbericht: {project_name}"),
+                summary_data.get("content", ""),
+                json.dumps(summary_data.get("highlights", [])),
+                json.dumps(summary_data.get("metrics", {})),
+                json.dumps(summary_data.get("recommendations", [])),
+                json.dumps(agent_contributions),
+            )
+        )
+        summary_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        log_activity("ai", f"[ARIA] Projektbericht erstellt für '{project_name}' (ID: {summary_id})",
+                     project_id=project_id, employee_id=1,
+                     details={"summary_id": summary_id, "tasks_total": len(tasks), "tasks_completed": completed})
+
+    except Exception as e:
+        logger.error(f"Project summary generation failed: {e}")
+        log_activity("error", f"Projektbericht-Erstellung fehlgeschlagen: {str(e)}", project_id=project_id, employee_id=1)
+
+
 # ─── API Endpoints ────────────────────────────────────────────────
 
 @app.get("/health")
@@ -653,6 +822,12 @@ async def execute_task(req: TaskRequest):
                 update_agent_metrics(employee_id)
             except Exception as me:
                 logger.error(f"Memory extraction failed: {me}")
+
+        # ─── Task Summary ───
+        try:
+            await generate_task_summary(req.task_id, title, result, employee, project_id)
+        except Exception as se:
+            logger.error(f"Task summary failed: {se}")
 
     except Exception as e:
         logger.error(f"Task error: {e}")
@@ -781,6 +956,12 @@ Antworte als JSON-Array:
 
         log_activity("ai", f"[ARIA] Projekt '{p_name}' koordiniert: {len(created_tasks)} Tasks abgeschlossen",
                      project_id=p_id, employee_id=aria_id)
+
+        # ─── Generate Project Summary ───
+        try:
+            await generate_project_summary(p_id, p_name, p_desc or "", sorted_tasks)
+        except Exception as se:
+            logger.error(f"Summary generation failed: {se}")
 
     except Exception as e:
         logger.error(f"Coordination error: {e}")
@@ -931,6 +1112,50 @@ async def get_memories(employee_id: int):
     """Erinnerungen eines Agenten abrufen."""
     memories = get_relevant_memories(employee_id, "", limit=20)
     return {"employee_id": employee_id, "memories": memories, "count": len(memories)}
+
+
+@app.get("/summaries")
+async def get_summaries(project_id: int = None, type: str = None, limit: int = 20):
+    """Zusammenfassungen abrufen."""
+    conn = get_db()
+    cur = conn.cursor()
+    sql = """SELECT s.id, s.project_id, s.task_id, s.type, s.title, s.content,
+                    s.highlights, s.metrics, s.recommendations, s.agent_contributions,
+                    s.created_at, p.name as project_name, e.name as generated_by_name
+             FROM summaries s
+             LEFT JOIN projects p ON s.project_id = p.id
+             LEFT JOIN employees e ON s.generated_by = e.id
+             WHERE 1=1"""
+    params = []
+    if project_id:
+        params.append(project_id)
+        sql += f" AND s.project_id = %s"
+    if type:
+        params.append(type)
+        sql += f" AND s.type = %s"
+    sql += " ORDER BY s.created_at DESC LIMIT %s"
+    params.append(limit)
+
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    cols = [desc[0] for desc in cur.description]
+    cur.close()
+    conn.close()
+
+    summaries = []
+    for row in rows:
+        s = dict(zip(cols, row))
+        # Ensure JSON fields are dicts/lists
+        for field in ["highlights", "metrics", "recommendations", "agent_contributions"]:
+            if isinstance(s[field], str):
+                try:
+                    s[field] = json.loads(s[field])
+                except Exception:
+                    s[field] = []
+        s["created_at"] = s["created_at"].isoformat() if s["created_at"] else None
+        summaries.append(s)
+
+    return {"summaries": summaries, "count": len(summaries)}
 
 
 if __name__ == "__main__":

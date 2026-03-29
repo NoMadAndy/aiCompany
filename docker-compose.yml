@@ -70,7 +70,9 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aicompany}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./scripts/migrate-002-features.sql:/docker-entrypoint-initdb.d/02-features.sql
+      - ./scripts/migrate-003-summaries.sql:/docker-entrypoint-initdb.d/03-summaries.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aicompany}"]
       interval: 5s

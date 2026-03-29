@@ -5,7 +5,8 @@ import Sidebar from '@/components/Sidebar'
 import StatusBar from '@/components/StatusBar'
 import {
   FolderKanban, Plus, TrendingUp, Clock, CheckCircle2, Loader2, Play,
-  Brain, Send, ChevronDown, ChevronUp, Zap, XCircle
+  Brain, Send, ChevronDown, ChevronUp, Zap, XCircle, ClipboardList,
+  Lightbulb, ArrowRight, Sparkles
 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 
@@ -30,6 +31,17 @@ interface Task {
   employee_name: string
   created_at: string
   completed_at: string | null
+}
+
+interface Summary {
+  id: number
+  title: string
+  content: string
+  highlights: string[]
+  metrics: Record<string, any>
+  recommendations: string[]
+  agent_contributions: Array<{ agent: string; task?: string; status?: string }>
+  created_at: string
 }
 
 const statusConfig: Record<string, { color: string; icon: any; label: string }> = {
@@ -87,6 +99,7 @@ export default function ProjectsPage() {
   const [coordinating, setCoordinating] = useState<Set<number>>(new Set())
   const [expandedProject, setExpandedProject] = useState<number | null>(null)
   const [projectTasks, setProjectTasks] = useState<Record<number, Task[]>>({})
+  const [projectSummaries, setProjectSummaries] = useState<Record<number, Summary | null>>({})
 
   const loadProjects = useCallback(async () => {
     const res = await fetch('/api/projects')
@@ -98,7 +111,7 @@ export default function ProjectsPage() {
     loadProjects()
   }, [loadProjects])
 
-  // Load tasks for expanded project
+  // Load tasks + summary for expanded project
   useEffect(() => {
     if (!expandedProject) return
     const loadTasks = async () => {
@@ -106,7 +119,17 @@ export default function ProjectsPage() {
       const data = await res.json()
       setProjectTasks(prev => ({ ...prev, [expandedProject]: data.tasks || [] }))
     }
+    const loadSummary = async () => {
+      try {
+        const res = await fetch(`/api/summaries?project_id=${expandedProject}&type=project&limit=1`)
+        const data = await res.json()
+        if (data.summaries && data.summaries.length > 0) {
+          setProjectSummaries(prev => ({ ...prev, [expandedProject]: data.summaries[0] }))
+        }
+      } catch {}
+    }
     loadTasks()
+    loadSummary()
     const interval = setInterval(loadTasks, 3000)
     return () => clearInterval(interval)
   }, [expandedProject])
@@ -130,6 +153,14 @@ export default function ProjectsPage() {
             next.delete(pid)
             return next
           })
+          // Load project summary
+          try {
+            const sRes = await fetch(`/api/summaries?project_id=${pid}&type=project&limit=1`)
+            const sData = await sRes.json()
+            if (sData.summaries && sData.summaries.length > 0) {
+              setProjectSummaries(prev => ({ ...prev, [pid]: sData.summaries[0] }))
+            }
+          } catch {}
         }
       })
     }, 3000)
@@ -239,6 +270,7 @@ export default function ProjectsPage() {
                 const tasks = projectTasks[p.id] || []
                 const runningTasks = tasks.filter(t => t.status === 'running')
                 const completedTasks = tasks.filter(t => t.status === 'completed')
+                const summary = projectSummaries[p.id]
 
                 return (
                   <div key={p.id} className="gradient-border p-6">
@@ -340,6 +372,60 @@ export default function ProjectsPage() {
                             ))}
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {/* Project Summary from ARIA */}
+                    {summary && (
+                      <div className="mt-4 p-4 rounded-xl bg-gradient-to-r from-indigo-500/5 to-purple-500/5 border border-indigo-500/15">
+                        <div className="flex items-center gap-2 mb-3">
+                          <ClipboardList size={16} className="text-indigo-400" />
+                          <h4 className="text-sm font-semibold text-indigo-400">ARIA Projektbericht</h4>
+                        </div>
+
+                        {/* Content */}
+                        <div
+                          className="text-sm text-[var(--text-secondary)] mb-3 leading-relaxed"
+                          dangerouslySetInnerHTML={{
+                            __html: summary.content
+                              .replace(/\*\*(.*?)\*\*/g, '<strong class="text-[var(--text-primary)]">$1</strong>')
+                              .replace(/\n/g, '<br/>')
+                              .slice(0, 1000)
+                          }}
+                        />
+
+                        {/* Highlights */}
+                        {summary.highlights && summary.highlights.length > 0 && (
+                          <div className="space-y-1 mb-3">
+                            {summary.highlights.slice(0, 3).map((h: string, i: number) => (
+                              <div key={i} className="flex items-start gap-2 text-xs">
+                                <Lightbulb size={12} className="text-amber-400 mt-0.5 shrink-0" />
+                                <span>{h}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Recommendations */}
+                        {summary.recommendations && summary.recommendations.length > 0 && (
+                          <div className="space-y-1 mb-3">
+                            {summary.recommendations.slice(0, 3).map((r: string, i: number) => (
+                              <div key={i} className="flex items-start gap-2 text-xs">
+                                <ArrowRight size={12} className="text-purple-400 mt-0.5 shrink-0" />
+                                <span>{r}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Link to full report */}
+                        <a
+                          href="/berichte"
+                          className="inline-flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition-colors mt-1"
+                        >
+                          <Sparkles size={12} />
+                          Vollständigen Bericht ansehen
+                        </a>
                       </div>
                     )}
                   </div>
