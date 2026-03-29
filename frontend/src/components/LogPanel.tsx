@@ -89,7 +89,8 @@ export default function LogPanel() {
     }
   }
 
-  const filteredEvents = filter === 'all' ? events : events.filter(e => e.type === filter)
+  const sorted = [...events].reverse()
+  const filteredEvents = filter === 'all' ? sorted : sorted.filter(e => e.type === filter)
 
   const height = state === 'hidden' ? 0 : state === 'collapsed' ? 36 : state === 'compact' ? 220 : '50vh'
 
@@ -164,7 +165,7 @@ export default function LogPanel() {
                 <span className={`flex-shrink-0 w-[36px] font-semibold text-[10px] uppercase ${TYPE_COLORS[event.type] || 'text-gray-400'}`}>
                   {TYPE_LABELS[event.type] || event.type}
                 </span>
-                <span className="text-[var(--text-secondary)] break-words">{event.message}</span>
+                <span className="text-[var(--text-secondary)] min-w-0 break-all" style={{ overflowWrap: 'anywhere' }}>{event.message}</span>
               </div>
             ))}
           </div>

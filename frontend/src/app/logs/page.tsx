@@ -27,7 +27,7 @@ export default function LogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [filter, setFilter] = useState<string>('')
   const [autoScroll, setAutoScroll] = useState(true)
-  const topRef = useRef<HTMLDivElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
 
   const fetchLogs = () => {
     const url = filter ? `/api/logs?type=${filter}` : '/api/logs'
@@ -41,7 +41,7 @@ export default function LogsPage() {
   }, [filter])
 
   useEffect(() => {
-    if (autoScroll) topRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (autoScroll) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [logs, autoScroll])
 
   const types = ['system', 'project', 'task', 'error', 'ai', 'finance']
@@ -97,21 +97,21 @@ export default function LogsPage() {
 
           <div className="flex-1 overflow-y-auto px-6 lg:px-8 pb-4">
             <div className="glass rounded-xl font-mono text-sm">
-              <div ref={topRef} />
-              {logs.map((log) => (
-                <div key={log.id} className="log-line flex gap-3 px-4 py-2 border-b border-[var(--border)]/50">
+              {[...logs].reverse().map((log) => (
+                <div key={log.id} className="log-line flex gap-3 px-4 py-2 border-b border-[var(--border)]/50 min-w-0">
                   <span className="text-[var(--text-secondary)] shrink-0 w-[140px]">
                     {new Date(log.created_at).toLocaleString('de-DE')}
                   </span>
                   <span className={cn('shrink-0 w-[70px] font-semibold', typeColors[log.type] || 'text-gray-400')}>
                     [{log.type}]
                   </span>
-                  <span className="text-[var(--text-primary)]">{log.message}</span>
+                  <span className="text-[var(--text-primary)] min-w-0 break-all" style={{ overflowWrap: 'anywhere' }}>{log.message}</span>
                 </div>
               ))}
               {logs.length === 0 && (
                 <div className="text-center py-12 text-[var(--text-secondary)]">Keine Logs vorhanden</div>
               )}
+              <div ref={bottomRef} />
             </div>
           </div>
         </main>

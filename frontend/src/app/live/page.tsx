@@ -154,14 +154,14 @@ export default function LivePage() {
             <div className="glass rounded-xl overflow-hidden">
               <div className="bg-[rgba(0,0,0,0.3)] p-4 font-mono text-xs min-h-[400px] space-y-0">
                 {events.map((event) => (
-                  <div key={event.id} className="flex gap-3 py-[3px] hover:bg-[rgba(255,255,255,0.03)] px-3 rounded transition">
+                  <div key={event.id} className="flex gap-3 py-[3px] hover:bg-[rgba(255,255,255,0.03)] px-3 rounded transition min-w-0">
                     <span className="text-[var(--text-tertiary)] shrink-0 w-[62px]">
                       {new Date(event.timestamp).toLocaleTimeString('de-DE')}
                     </span>
                     <span className={cn('shrink-0 w-[52px] font-semibold', TYPE_COLORS[event.type] || 'text-gray-400')}>
                       [{event.type}]
                     </span>
-                    <span className="text-[var(--text-secondary)] break-words min-w-0">
+                    <span className="text-[var(--text-secondary)] min-w-0 break-all" style={{ overflowWrap: 'anywhere' }}>
                       {event.message}
                     </span>
                   </div>

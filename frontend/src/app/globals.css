@@ -276,6 +276,12 @@ body {
   padding: 2px 16px;
   border-bottom: 1px solid rgba(255,255,255,0.02);
   transition: background 0.15s ease;
+  min-width: 0;
+}
+.log-entry > span:last-child {
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .log-entry:hover { background: rgba(255,255,255,0.03); }
 

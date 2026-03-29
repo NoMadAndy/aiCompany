@@ -6,9 +6,10 @@ import StatusBar from '@/components/StatusBar'
 import {
   ClipboardList, FileText, CheckCircle2, XCircle, Lightbulb, BarChart3,
   Bot, Clock, ChevronDown, ChevronUp, Sparkles, ArrowRight, Filter,
-  FolderKanban, Zap
+  FolderKanban, Zap, Presentation as PresentationIcon
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import Presentation from '@/components/Presentation'
 
 interface Summary {
   id: number
@@ -46,7 +47,7 @@ function renderMarkdown(text: string): string {
     .replace(/\n/g, '<br/>')
 }
 
-function SummaryCard({ summary, defaultExpanded = false }: { summary: Summary; defaultExpanded?: boolean }) {
+function SummaryCard({ summary, defaultExpanded = false, onPresent }: { summary: Summary; defaultExpanded?: boolean; onPresent: (s: Summary) => void }) {
   const [expanded, setExpanded] = useState(defaultExpanded)
   const config = typeConfig[summary.type] || typeConfig.task
 
@@ -96,8 +97,15 @@ function SummaryCard({ summary, defaultExpanded = false }: { summary: Summary; d
             </div>
           </div>
 
-          {/* Expand toggle */}
-          <div className="shrink-0 p-1">
+          {/* Actions */}
+          <div className="shrink-0 flex items-center gap-1">
+            <button
+              onClick={(e) => { e.stopPropagation(); onPresent(summary) }}
+              className="p-2 rounded-lg hover:bg-indigo-500/10 text-[var(--text-secondary)] hover:text-indigo-400 transition"
+              title="Als Präsentation anzeigen"
+            >
+              <PresentationIcon size={16} />
+            </button>
             {expanded ? <ChevronUp size={18} className="text-[var(--text-secondary)]" /> : <ChevronDown size={18} className="text-[var(--text-secondary)]" />}
           </div>
         </div>
@@ -221,6 +229,7 @@ export default function BerichtePage() {
   const [summaries, setSummaries] = useState<Summary[]>([])
   const [filter, setFilter] = useState<'all' | 'project' | 'task'>('all')
   const [loading, setLoading] = useState(true)
+  const [presenting, setPresenting] = useState<Summary | null>(null)
 
   const loadSummaries = useCallback(async () => {
     try {
@@ -317,7 +326,7 @@ export default function BerichtePage() {
             ) : (
               <div className="space-y-4">
                 {summaries.map((s, i) => (
-                  <SummaryCard key={s.id} summary={s} defaultExpanded={i === 0} />
+                  <SummaryCard key={s.id} summary={s} defaultExpanded={i === 0} onPresent={setPresenting} />
                 ))}
               </div>
             )}
@@ -325,6 +334,11 @@ export default function BerichtePage() {
         </main>
       </div>
       <StatusBar />
+
+      {/* Presentation overlay */}
+      {presenting && (
+        <Presentation summary={presenting} onClose={() => setPresenting(null)} />
+      )}
     </div>
   )
 }
