@@ -173,6 +173,41 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0
     return "nginx:alpine"
 
 
+def _sanitize_code(code: str, language: str) -> str:
+    """Bereinigt typische KI-Generierungsfehler im Code."""
+    lines = code.splitlines()
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        # Entferne Shell-Befehle die keine Python/JS-Statements sind
+        if stripped.startswith("pip install ") or stripped.startswith("pip3 install "):
+            continue
+        if stripped.startswith("npm install ") or stripped.startswith("yarn add "):
+            continue
+        if stripped.startswith("$ ") or stripped.startswith("% "):
+            continue
+        # Entferne Shell-Startbefehle die keine Code-Statements sind
+        if stripped.startswith("uvicorn ") or stripped.startswith("python ") or stripped.startswith("python3 "):
+            if "import" not in stripped and "=" not in stripped:
+                continue
+        if stripped.startswith("node ") or stripped.startswith("flask run"):
+            continue
+        # Entferne Markdown-Artefakte
+        if stripped.startswith("```"):
+            continue
+        if language == "python":
+            # Ersetze JSON-null/true/false durch Python-Aequivalente
+            if "null" in line and "None" not in line:
+                line = line.replace("null,", "None,").replace("null}", "None}").replace("null)", "None)")
+                line = line.replace(": null", ": None").replace("=null", "=None")
+            if re.match(r'.*[^"\']true[^"\']', line) and "True" not in line:
+                line = re.sub(r'\btrue\b', 'True', line)
+            if re.match(r'.*[^"\']false[^"\']', line) and "False" not in line:
+                line = re.sub(r'\bfalse\b', 'False', line)
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+
 def _extract_python_deps(code: str) -> list[str]:
     """Extrahiert pip-Pakete aus import-Statements."""
     # Mapping von import-Namen zu pip-Paketnamen
@@ -518,6 +553,10 @@ def deploy_app(app_id: int) -> dict:
         # Alte Apps (vor v0.7) haben alles in HTML gewrapped.
         code_lower = code.strip().lower()
         is_html = code_lower.startswith("<!doctype") or code_lower.startswith("<html") or "<html" in code_lower[:500]
+
+        # Code bereinigen (KI-Artefakte entfernen)
+        if not is_html:
+            code = _sanitize_code(code, language)
 
         if language in ("python", "py") and not is_html:
             base_image = _create_python_app(build_dir, code, app_name)
