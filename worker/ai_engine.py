@@ -161,21 +161,33 @@ async def think(system_prompt: str, user_message: str, max_tokens: int = 2048) -
     Main AI inference function. Tries Claude API first, falls back to local model.
     Always returns a response (never None).
     """
+    result, _ = await think_with_meta(system_prompt, user_message, max_tokens)
+    return result
+
+
+async def think_with_meta(system_prompt: str, user_message: str, max_tokens: int = 2048) -> tuple:
+    """
+    Wie think(), gibt aber (text, meta) zurueck.
+    meta = {"model": str, "backend": str, "tokens": int}
+    """
     # Try Claude API first
     result = await generate_with_claude(system_prompt, user_message, max_tokens)
     if result:
         logger.info("Response generated via Claude API")
-        return result
+        meta = {"model": "claude-sonnet-4-20250514", "backend": "claude", "tokens": len(result.split())}
+        return result, meta
 
     # Fall back to local model
     result = await generate_with_local(system_prompt, user_message, min(max_tokens, 2048))
     if result:
         logger.info("Response generated via local model")
-        return result
+        meta = {"model": _model_name, "backend": "local", "tokens": len(result.split())}
+        return result, meta
 
     # Ultimate fallback
     logger.warning("All AI backends failed, returning fallback")
-    return f"[AI Engine Offline] Aufgabe empfangen: {user_message[:200]}. Weder Claude API noch lokales Modell verfügbar. Bitte ANTHROPIC_API_KEY setzen oder GPU prüfen."
+    fallback = f"[AI Engine Offline] Aufgabe empfangen: {user_message[:200]}. Weder Claude API noch lokales Modell verfügbar. Bitte ANTHROPIC_API_KEY setzen oder GPU prüfen."
+    return fallback, {"model": "none", "backend": "offline", "tokens": 0}
 
 
 async def think_structured(system_prompt: str, user_message: str, output_format: str = "json") -> dict:
@@ -221,6 +233,36 @@ WICHTIG: Antworte NUR mit validem JSON, kein anderer Text davor oder danach."""
             pass
 
     return {"raw_response": raw}
+
+
+async def test_claude_api() -> dict:
+    """Testet die Claude API mit einer minimalen Anfrage. Gibt Ergebnis + Latenz zurueck."""
+    import time
+    client = get_claude_client()
+    if not client:
+        return {"success": False, "error": "Kein API-Key konfiguriert", "latency_ms": 0}
+    try:
+        start = time.time()
+        response = await asyncio.to_thread(
+            client.messages.create,
+            model="claude-sonnet-4-20250514",
+            max_tokens=10,
+            messages=[{"role": "user", "content": "Antworte mit OK"}],
+        )
+        latency = round((time.time() - start) * 1000)
+        text = response.content[0].text if response.content else ""
+        return {
+            "success": True,
+            "response": text,
+            "model": "claude-sonnet-4-20250514",
+            "latency_ms": latency,
+            "usage": {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            }
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e), "latency_ms": 0}
 
 
 def get_engine_status() -> dict:

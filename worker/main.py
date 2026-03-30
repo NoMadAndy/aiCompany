@@ -17,7 +17,7 @@ import redis
 import httpx
 
 from tasks.research import web_search, search_scientific
-from ai_engine import think, think_structured, get_engine_status, load_local_model
+from ai_engine import think, think_with_meta, think_structured, get_engine_status, load_local_model, test_claude_api
 from agents.memory import extract_and_store_learnings, get_relevant_memories, update_agent_metrics
 from agents.self_evolve import propose_change, apply_change, rollback_change, analyze_and_propose, read_file, list_files
 from app_deployer import deploy_app, stop_app, restart_app, remove_app, get_app_status, get_container_logs, find_available_port, cleanup_orphaned_containers
@@ -315,14 +315,16 @@ Bitte erstelle einen umfassenden Recherchebericht:
 4. Konkrete Handlungsempfehlungen
 5. Offene Fragen und weitere Forschungsrichtungen"""
 
-    analysis = await think(system_prompt, user_msg)
+    analysis, meta = await think_with_meta(system_prompt, user_msg)
 
-    log_activity("ai", f"[{agent_name}] Recherche abgeschlossen: {len(web_results)} Web + {len(scientific_results)} Paper",
+    log_activity("ai", f"[{agent_name}] Recherche abgeschlossen via {meta['backend']}: {len(web_results)} Web + {len(scientific_results)} Paper",
                  employee_id=employee.get("id"))
 
     return {
         "type": "research",
         "summary": analysis,
+        "model_used": meta["model"],
+        "backend": meta["backend"],
         "web_results": web_results,
         "scientific_results": scientific_results,
         "sources_count": len(web_results) + len(scientific_results),
@@ -354,13 +356,15 @@ der HTML als Response zurueckliefert. Beginne den Code-Block mit ```python.
 
 Antworte mit GENAU EINEM Code-Block. Keine Erklaerung vor oder nach dem Code."""
 
-    code_response = await think(system_prompt, user_msg, max_tokens=4096)
+    code_response, meta = await think_with_meta(system_prompt, user_msg, max_tokens=4096)
 
-    log_activity("ai", f"[{agent_name}] Code generiert: {title[:60]}", employee_id=employee.get("id"))
+    log_activity("ai", f"[{agent_name}] Code generiert via {meta['backend']}: {title[:60]}", employee_id=employee.get("id"))
 
     return {
         "type": "code_generation",
         "summary": code_response,
+        "model_used": meta["model"],
+        "backend": meta["backend"],
     }
 
 
@@ -407,10 +411,10 @@ Bitte erstelle eine detaillierte Analyse mit:
 3. Trend-Analyse
 4. Konkrete Empfehlungen"""
 
-    analysis = await think(system_prompt, user_msg)
+    analysis, meta = await think_with_meta(system_prompt, user_msg)
 
-    log_activity("ai", f"[{agent_name}] Analyse abgeschlossen", employee_id=employee.get("id"))
-    return {"type": "analysis", "summary": analysis}
+    log_activity("ai", f"[{agent_name}] Analyse abgeschlossen via {meta['backend']}", employee_id=employee.get("id"))
+    return {"type": "analysis", "summary": analysis, "model_used": meta["model"], "backend": meta["backend"]}
 
 
 async def execute_finance(title: str, employee: dict) -> dict:
@@ -453,10 +457,10 @@ Erstelle eine detaillierte Finanzanalyse mit:
 4. Risikobewertung
 5. Optimierungsvorschläge"""
 
-    analysis = await think(system_prompt, user_msg)
+    analysis, meta = await think_with_meta(system_prompt, user_msg)
 
-    log_activity("ai", f"[{agent_name}] Finanzbericht erstellt", employee_id=employee.get("id"))
-    return {"type": "finance", "summary": analysis}
+    log_activity("ai", f"[{agent_name}] Finanzbericht erstellt via {meta['backend']}", employee_id=employee.get("id"))
+    return {"type": "finance", "summary": analysis, "model_used": meta["model"], "backend": meta["backend"]}
 
 
 async def execute_ml_training(title: str, employee: dict) -> dict:
@@ -506,10 +510,10 @@ Bitte erstelle basierend auf der Aufgabe:
 3. Ressourcen-Abschätzung (VRAM, Trainingszeit)
 4. Geeignete Modelle/Architekturen für 8GB VRAM"""
 
-    analysis = await think(system_prompt, user_msg)
+    analysis, meta = await think_with_meta(system_prompt, user_msg)
 
-    log_activity("ai", f"[{agent_name}] ML-Aufgabe abgeschlossen", employee_id=employee.get("id"))
-    return {"type": "ml_training", "summary": analysis, "gpu": gpu, "benchmark": bench_results}
+    log_activity("ai", f"[{agent_name}] ML-Aufgabe abgeschlossen via {meta['backend']}", employee_id=employee.get("id"))
+    return {"type": "ml_training", "summary": analysis, "model_used": meta["model"], "backend": meta["backend"], "gpu": gpu, "benchmark": bench_results}
 
 
 async def execute_planning(title: str, employee: dict) -> dict:
@@ -549,10 +553,10 @@ Erstelle einen detaillierten Plan mit:
 4. Zeitliche Meilensteine
 5. Risiken und Gegenmaßnahmen"""
 
-    plan = await think(system_prompt, user_msg)
+    plan, meta = await think_with_meta(system_prompt, user_msg)
 
-    log_activity("ai", f"[{agent_name}] Planung abgeschlossen", employee_id=employee.get("id"))
-    return {"type": "planning", "summary": plan}
+    log_activity("ai", f"[{agent_name}] Planung abgeschlossen via {meta['backend']}", employee_id=employee.get("id"))
+    return {"type": "planning", "summary": plan, "model_used": meta["model"], "backend": meta["backend"]}
 
 
 async def execute_general(title: str, employee: dict) -> dict:
@@ -565,10 +569,10 @@ async def execute_general(title: str, employee: dict) -> dict:
 
 Bearbeite diese Aufgabe vollständig und gib ein detailliertes Ergebnis zurück."""
 
-    result = await think(system_prompt, user_msg)
+    result, meta = await think_with_meta(system_prompt, user_msg)
 
-    log_activity("ai", f"[{agent_name}] Aufgabe abgeschlossen: {title[:60]}", employee_id=employee.get("id"))
-    return {"type": "general", "summary": result}
+    log_activity("ai", f"[{agent_name}] Aufgabe abgeschlossen via {meta['backend']}: {title[:60]}", employee_id=employee.get("id"))
+    return {"type": "general", "summary": result, "model_used": meta["model"], "backend": meta["backend"]}
 
 
 # Task dispatcher
@@ -1144,6 +1148,13 @@ async def ai_status():
     return get_engine_status()
 
 
+@app.get("/ai/test")
+async def api_test():
+    """Testet die Claude API mit einer minimalen Anfrage."""
+    result = await test_claude_api()
+    return result
+
+
 @app.get("/system/metrics")
 async def system_metrics():
     """Umfassende System-Metriken fuer Monitoring-Dashboard."""
@@ -1244,6 +1255,36 @@ async def system_metrics():
         cur.execute("SELECT COUNT(*) FROM deployed_apps WHERE status = 'active'")
         containers["apps_total"] = cur.fetchone()[0]
 
+        # Modell-Nutzung pro Task (aus result JSONB)
+        model_usage = {"claude": 0, "local": 0, "offline": 0, "unknown": 0, "recent_tasks": []}
+        try:
+            cur.execute("""
+                SELECT id, title, status, result->>'model_used' as model,
+                       result->>'backend' as backend, completed_at,
+                       result->>'task_type' as task_type
+                FROM tasks WHERE result IS NOT NULL
+                ORDER BY completed_at DESC NULLS LAST
+                LIMIT 50
+            """)
+            for row in cur.fetchall():
+                backend = row[4] or "unknown"
+                if backend in model_usage:
+                    model_usage[backend] += 1
+                else:
+                    model_usage["unknown"] += 1
+                if len(model_usage["recent_tasks"]) < 15:
+                    model_usage["recent_tasks"].append({
+                        "id": row[0],
+                        "title": (row[1] or "")[:60],
+                        "status": row[2],
+                        "model": row[3] or "unbekannt",
+                        "backend": backend,
+                        "completed_at": row[5].isoformat() if row[5] else None,
+                        "task_type": row[6],
+                    })
+        except Exception as me:
+            logger.warning(f"Model usage query failed: {me}")
+
         cur.close()
         conn.close()
 
@@ -1254,6 +1295,7 @@ async def system_metrics():
             "projects": projects,
             "agents": agents,
             "containers": containers,
+            "model_usage": model_usage,
             "timestamp": datetime.now().isoformat(),
         }
     except Exception as e:

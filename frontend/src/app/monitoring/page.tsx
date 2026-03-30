@@ -4,11 +4,21 @@ import { useState, useEffect } from 'react'
 import Sidebar from '@/components/Sidebar'
 import StatusBar from '@/components/StatusBar'
 import {
-  Cpu, HardDrive, Activity, Server, Box, Brain,
+  Cpu, Activity, Server, Box, Brain,
   CheckCircle, XCircle, AlertTriangle, Clock, Zap,
-  BarChart3, Users, FolderKanban, Container
+  Users, FolderKanban, Play, Loader2
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+
+interface RecentTask {
+  id: number
+  title: string
+  status: string
+  model: string
+  backend: string
+  completed_at: string | null
+  task_type: string
+}
 
 interface Metrics {
   ai: {
@@ -48,8 +58,21 @@ interface Metrics {
     running: number; stopped: number; error: number
     building: number; total: number; apps_total: number
   }
+  model_usage: {
+    claude: number; local: number; offline: number; unknown: number
+    recent_tasks: RecentTask[]
+  }
   timestamp: string
   error?: string
+}
+
+interface ApiTestResult {
+  success: boolean
+  response?: string
+  model?: string
+  latency_ms: number
+  error?: string
+  usage?: { input_tokens: number; output_tokens: number }
 }
 
 const AGENT_COLORS: Record<string, string> = {
@@ -60,10 +83,19 @@ const AGENT_COLORS: Record<string, string> = {
   VAULT: 'text-emerald-400',
 }
 
+const BACKEND_LABEL: Record<string, { label: string; color: string }> = {
+  claude: { label: 'Claude API', color: 'bg-green-500/20 text-green-400' },
+  local: { label: 'Lokal', color: 'bg-amber-500/20 text-amber-400' },
+  offline: { label: 'Offline', color: 'bg-red-500/20 text-red-400' },
+  unknown: { label: 'Unbekannt', color: 'bg-gray-500/20 text-gray-400' },
+}
+
 export default function MonitoringPage() {
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [loading, setLoading] = useState(true)
   const [lastUpdate, setLastUpdate] = useState<string>('')
+  const [apiTest, setApiTest] = useState<ApiTestResult | null>(null)
+  const [apiTesting, setApiTesting] = useState(false)
 
   const fetchMetrics = async () => {
     try {
@@ -80,6 +112,20 @@ export default function MonitoringPage() {
     }
   }
 
+  const runApiTest = async () => {
+    setApiTesting(true)
+    setApiTest(null)
+    try {
+      const res = await fetch('/api/monitoring/test')
+      const data = await res.json()
+      setApiTest(data)
+    } catch (e: any) {
+      setApiTest({ success: false, error: e.message, latency_ms: 0 })
+    } finally {
+      setApiTesting(false)
+    }
+  }
+
   useEffect(() => {
     fetchMetrics()
     const interval = setInterval(fetchMetrics, 10000)
@@ -93,6 +139,10 @@ export default function MonitoringPage() {
   const vramUsed = metrics?.gpu?.vram_used ? parseFloat(metrics.gpu.vram_used) : 0
   const vramTotal = metrics?.gpu?.memory ? parseFloat(metrics.gpu.memory) : 8
   const vramPercent = Math.round((vramUsed / Math.max(vramTotal, 0.1)) * 100)
+
+  const modelTotal = metrics?.model_usage
+    ? metrics.model_usage.claude + metrics.model_usage.local + metrics.model_usage.offline + metrics.model_usage.unknown
+    : 0
 
   return (
     <div className="flex h-screen bg-[var(--bg-primary)]">
@@ -160,6 +210,37 @@ export default function MonitoringPage() {
                       <span className={cn('text-sm', metrics.ai.gpu_available ? 'text-green-400' : 'text-red-400')}>
                         {metrics.ai.gpu_available ? 'Aktiv' : 'Inaktiv'}
                       </span>
+                    </div>
+                    {/* API Live-Test */}
+                    <div className="pt-2 border-t border-[var(--border)]">
+                      <button
+                        onClick={runApiTest}
+                        disabled={apiTesting}
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm
+                                   bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 transition-colors
+                                   disabled:opacity-50"
+                      >
+                        {apiTesting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                        {apiTesting ? 'Teste...' : 'API Live-Test'}
+                      </button>
+                      {apiTest && (
+                        <div className={cn('mt-2 p-2 rounded text-xs font-mono',
+                          apiTest.success ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'
+                        )}>
+                          {apiTest.success ? (
+                            <>
+                              <div>Antwort: {apiTest.response}</div>
+                              <div>Modell: {apiTest.model}</div>
+                              <div>Latenz: {apiTest.latency_ms}ms</div>
+                              {apiTest.usage && (
+                                <div>Tokens: {apiTest.usage.input_tokens} in / {apiTest.usage.output_tokens} out</div>
+                              )}
+                            </>
+                          ) : (
+                            <div>Fehler: {apiTest.error}</div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -251,35 +332,156 @@ export default function MonitoringPage() {
                 </div>
               </div>
 
-              {/* Container Overview */}
-              <div className="glass rounded-xl p-5">
-                <div className="flex items-center gap-2 mb-4">
-                  <Box size={20} className="text-blue-400" />
-                  <h2 className="font-semibold">Container & Apps</h2>
+              {/* Model Usage Stats + Container Overview */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Model Usage */}
+                <div className="glass rounded-xl p-5">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Brain size={20} className="text-cyan-400" />
+                    <h2 className="font-semibold">Modell-Nutzung (letzte 50 Tasks)</h2>
+                  </div>
+                  {modelTotal > 0 ? (
+                    <div className="space-y-3">
+                      {/* Bar chart */}
+                      <div className="flex h-6 rounded-full overflow-hidden bg-[var(--bg-primary)]">
+                        {metrics.model_usage.claude > 0 && (
+                          <div
+                            className="bg-green-500 flex items-center justify-center text-xs font-mono text-white"
+                            style={{ width: `${(metrics.model_usage.claude / modelTotal) * 100}%` }}
+                            title={`Claude: ${metrics.model_usage.claude}`}
+                          >
+                            {metrics.model_usage.claude > 2 && metrics.model_usage.claude}
+                          </div>
+                        )}
+                        {metrics.model_usage.local > 0 && (
+                          <div
+                            className="bg-amber-500 flex items-center justify-center text-xs font-mono text-white"
+                            style={{ width: `${(metrics.model_usage.local / modelTotal) * 100}%` }}
+                            title={`Lokal: ${metrics.model_usage.local}`}
+                          >
+                            {metrics.model_usage.local > 2 && metrics.model_usage.local}
+                          </div>
+                        )}
+                        {(metrics.model_usage.offline + metrics.model_usage.unknown) > 0 && (
+                          <div
+                            className="bg-gray-500 flex items-center justify-center text-xs font-mono text-white"
+                            style={{ width: `${((metrics.model_usage.offline + metrics.model_usage.unknown) / modelTotal) * 100}%` }}
+                          />
+                        )}
+                      </div>
+                      <div className="flex gap-4 text-xs">
+                        <span className="flex items-center gap-1">
+                          <span className="w-2 h-2 rounded-full bg-green-500" />
+                          Claude API: {metrics.model_usage.claude}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="w-2 h-2 rounded-full bg-amber-500" />
+                          Lokal: {metrics.model_usage.local}
+                        </span>
+                        {(metrics.model_usage.offline + metrics.model_usage.unknown) > 0 && (
+                          <span className="flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-gray-500" />
+                            Andere: {metrics.model_usage.offline + metrics.model_usage.unknown}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-[var(--text-secondary)]">Noch keine Tasks mit Modell-Tracking</p>
+                  )}
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                  <div className="text-center p-3 rounded-lg bg-[var(--bg-primary)]">
-                    <div className="text-2xl font-bold">{metrics.containers.apps_total}</div>
-                    <div className="text-xs text-[var(--text-secondary)]">Apps gesamt</div>
+
+                {/* Container Overview */}
+                <div className="glass rounded-xl p-5">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Box size={20} className="text-blue-400" />
+                    <h2 className="font-semibold">Container & Apps</h2>
                   </div>
-                  <div className="text-center p-3 rounded-lg bg-green-500/10">
-                    <div className="text-2xl font-bold text-green-400">{metrics.containers.running}</div>
-                    <div className="text-xs text-green-400/70">Running</div>
-                  </div>
-                  <div className="text-center p-3 rounded-lg bg-amber-500/10">
-                    <div className="text-2xl font-bold text-amber-400">{metrics.containers.stopped}</div>
-                    <div className="text-xs text-amber-400/70">Stopped</div>
-                  </div>
-                  <div className="text-center p-3 rounded-lg bg-blue-500/10">
-                    <div className="text-2xl font-bold text-blue-400">{metrics.containers.building}</div>
-                    <div className="text-xs text-blue-400/70">Building</div>
-                  </div>
-                  <div className="text-center p-3 rounded-lg bg-red-500/10">
-                    <div className="text-2xl font-bold text-red-400">{metrics.containers.error}</div>
-                    <div className="text-xs text-red-400/70">Error</div>
+                  <div className="grid grid-cols-5 gap-3">
+                    <div className="text-center p-2 rounded-lg bg-[var(--bg-primary)]">
+                      <div className="text-xl font-bold">{metrics.containers.apps_total}</div>
+                      <div className="text-[10px] text-[var(--text-secondary)]">Gesamt</div>
+                    </div>
+                    <div className="text-center p-2 rounded-lg bg-green-500/10">
+                      <div className="text-xl font-bold text-green-400">{metrics.containers.running}</div>
+                      <div className="text-[10px] text-green-400/70">Running</div>
+                    </div>
+                    <div className="text-center p-2 rounded-lg bg-amber-500/10">
+                      <div className="text-xl font-bold text-amber-400">{metrics.containers.stopped}</div>
+                      <div className="text-[10px] text-amber-400/70">Stopped</div>
+                    </div>
+                    <div className="text-center p-2 rounded-lg bg-blue-500/10">
+                      <div className="text-xl font-bold text-blue-400">{metrics.containers.building}</div>
+                      <div className="text-[10px] text-blue-400/70">Building</div>
+                    </div>
+                    <div className="text-center p-2 rounded-lg bg-red-500/10">
+                      <div className="text-xl font-bold text-red-400">{metrics.containers.error}</div>
+                      <div className="text-[10px] text-red-400/70">Error</div>
+                    </div>
                   </div>
                 </div>
               </div>
+
+              {/* Recent Tasks with Model Info */}
+              {metrics.model_usage.recent_tasks.length > 0 && (
+                <div className="glass rounded-xl p-5">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Activity size={20} className="text-cyan-400" />
+                    <h2 className="font-semibold">Letzte Tasks — Modell-Zuordnung</h2>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-[var(--text-secondary)] border-b border-[var(--border)]">
+                          <th className="text-left py-2 px-3">#</th>
+                          <th className="text-left py-2 px-3">Task</th>
+                          <th className="text-left py-2 px-3">Typ</th>
+                          <th className="text-center py-2 px-3">Status</th>
+                          <th className="text-left py-2 px-3">Modell</th>
+                          <th className="text-left py-2 px-3">Backend</th>
+                          <th className="text-right py-2 px-3">Zeit</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {metrics.model_usage.recent_tasks.map(t => {
+                          const b = BACKEND_LABEL[t.backend] || BACKEND_LABEL.unknown
+                          return (
+                            <tr key={t.id} className="border-b border-[var(--border)]/30 hover:bg-[var(--bg-hover)]">
+                              <td className="py-2 px-3 text-[var(--text-secondary)] font-mono">{t.id}</td>
+                              <td className="py-2 px-3 max-w-[250px] truncate">{t.title}</td>
+                              <td className="py-2 px-3">
+                                <span className="text-xs px-2 py-0.5 rounded bg-[var(--bg-primary)] text-[var(--text-secondary)]">
+                                  {t.task_type || '-'}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-center">
+                                {t.status === 'completed' ? (
+                                  <CheckCircle size={14} className="inline text-green-400" />
+                                ) : t.status === 'failed' ? (
+                                  <XCircle size={14} className="inline text-red-400" />
+                                ) : (
+                                  <Clock size={14} className="inline text-amber-400" />
+                                )}
+                              </td>
+                              <td className="py-2 px-3 font-mono text-xs">{t.model}</td>
+                              <td className="py-2 px-3">
+                                <span className={cn('text-xs px-2 py-0.5 rounded', b.color)}>
+                                  {b.label}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-right text-xs text-[var(--text-secondary)]">
+                                {t.completed_at
+                                  ? new Date(t.completed_at).toLocaleString('de-DE', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })
+                                  : '-'}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {/* Projects Progress */}
               <div className="glass rounded-xl p-5">
