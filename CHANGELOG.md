@@ -5,6 +5,15 @@ Alle wichtigen Änderungen an AI Company werden hier dokumentiert.
 Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.6.1] - 2026-03-30 — "Atlas"
+
+### Hinzugefuegt
+- **Build-Test-Fix Pipeline**: Automatische Code-Validierung und Reparatur
+  - Syntax-Validierung vor Deployment (Python ast.parse, JS Klammern-Check)
+  - Docker-Deploy → Health-Check → KI-Fehleranalyse → Auto-Fix (max 3 Versuche)
+  - KI repariert fehlerhaften Code automatisch basierend auf Container-Logs
+  - Pipeline laeuft automatisch nach jeder Code-Generierung
+
 ## [0.6.0] - 2026-03-30 — "Atlas"
 
 ### Hinzugefuegt

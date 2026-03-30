@@ -2,8 +2,11 @@
 
 import os
 import json
+import ast
 import asyncio
 import logging
+import subprocess
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -125,17 +128,26 @@ Antworte immer auf Deutsch. Sei präzise, strukturiert und handlungsorientiert."
 
 Deine Expertise:
 - Python, TypeScript, JavaScript, SQL
-- Web-Frameworks: FastAPI, Next.js, React
+- Web-Frameworks: FastAPI, Flask, Express
 - Infrastruktur: Docker, PostgreSQL, Redis
 - GPU-Programmierung: PyTorch, CUDA
 
-Wenn du Code schreibst:
-- Schreibe vollständigen, lauffähigen Code (keine Platzhalter)
-- Kommentiere auf Deutsch
-- Nutze Best Practices und moderne Patterns
-- Teste gedanklich auf Edge Cases
+WICHTIG — Regeln fuer Code-Generierung:
+1. Schreibe IMMER eine EINZIGE, vollstaendige Datei — kein Aufteilen auf mehrere Dateien/Module
+2. Der Code MUSS ein Web-Server sein der auf Port 80 lauscht
+3. Der Code MUSS einen GET / Endpunkt haben der eine HTML-Seite zurueckgibt
+4. Der Code MUSS einen GET /health Endpunkt haben der 200 OK zurueckgibt
+5. Alle imports/requires muessen am Anfang stehen
+6. KEINE Platzhalter, KEINE TODOs, KEINE fehlenden Implementierungen
+7. KEINE pip install / npm install / Shell-Befehle im Code
+8. KEINE externen Dateien referenzieren (models.py etc.) — alles in EINER Datei
+9. Fuer Python: nutze FastAPI + uvicorn, app = FastAPI()
+10. Fuer JavaScript: nutze express, app.listen(80)
+11. Nutze in-memory Daten statt Datenbank-Abhaengigkeiten
+12. Schreibe NUR den Code in einem einzigen ```python oder ```javascript Block
+13. Die HTML-Seite soll gut aussehen (dunkles Theme, modernes CSS)
 
-Antworte auf Deutsch. Sei technisch präzise.""",
+Antworte auf Deutsch. Sei technisch praezise.""",
 
     "SCOUT": """Du bist SCOUT, Research Analyst der AI Company. Du bist ein akribischer Forscher und Analyst.
 
@@ -291,22 +303,26 @@ Bitte erstelle einen umfassenden Recherchebericht:
 
 
 async def execute_code_generation(title: str, employee: dict) -> dict:
-    """NEXUS generates real, working code"""
+    """NEXUS generates real, working code as a deployable web application."""
     agent_name = employee.get("name", "NEXUS")
     system_prompt = enrich_prompt_with_memory(AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["NEXUS"]), employee, title)
     log_activity("ai", f"[{agent_name}] Starte Code-Generierung: {title[:80]}", employee_id=employee.get("id"))
 
     user_msg = f"""Aufgabe: {title}
 
-Bitte erstelle:
-1. Vollständigen, lauffähigen Code
-2. Kurze Erklärung der Architektur
-3. Installationsanweisungen (falls nötig)
-4. Beispiel-Nutzung
+Erstelle eine vollstaendige, deploybare Web-Applikation als EINE EINZIGE Datei.
 
-Schreibe echten, funktionierenden Code — keine Platzhalter oder TODOs."""
+Anforderungen:
+- Ein Web-Server (FastAPI fuer Python, Express fuer JS) der auf Port 80 lauscht
+- Ein GET / Endpunkt mit einer schoenen HTML-Seite (dunkles Theme) die die Funktionalitaet zeigt
+- Ein GET /health Endpunkt der {{"status": "ok"}} zurueckgibt
+- Alle Logik in einer Datei, alle Imports am Anfang
+- Kein externer State (keine Datenbank noetig, nutze in-memory Daten)
+- Keine externen Module-Dateien (kein models.py o.ae.)
 
-    code_response = await think(system_prompt, user_msg)
+Antworte mit GENAU EINEM Code-Block. Keine Erklaerung vor oder nach dem Code."""
+
+    code_response = await think(system_prompt, user_msg, max_tokens=4096)
 
     log_activity("ai", f"[{agent_name}] Code generiert: {title[:60]}", employee_id=employee.get("id"))
 
@@ -704,13 +720,225 @@ Erstelle einen strukturierten Bericht als JSON:
         log_activity("error", f"Projektbericht-Erstellung fehlgeschlagen: {str(e)}", project_id=project_id, employee_id=1)
 
 
+# ─── Code Validation & Build-Test-Fix Pipeline ──────────────────
+
+def validate_python_syntax(code: str) -> dict:
+    """Validiert Python-Code mit ast.parse. Gibt {'valid': bool, 'error': str} zurueck."""
+    try:
+        ast.parse(code)
+        return {"valid": True, "error": None}
+    except SyntaxError as e:
+        return {"valid": False, "error": f"Zeile {e.lineno}: {e.msg}"}
+
+
+def validate_javascript_syntax(code: str) -> dict:
+    """Basis-Validierung fuer JS: Klammern-Check und offensichtliche Fehler."""
+    # Klammern-Balance pruefen
+    stack = []
+    pairs = {')': '(', ']': '[', '}': '{'}
+    in_string = None
+    escape = False
+    for i, ch in enumerate(code):
+        if escape:
+            escape = False
+            continue
+        if ch == '\\':
+            escape = True
+            continue
+        if ch in ('"', "'", '`'):
+            if in_string == ch:
+                in_string = None
+            elif in_string is None:
+                in_string = ch
+            continue
+        if in_string:
+            continue
+        if ch in ('(', '[', '{'):
+            stack.append(ch)
+        elif ch in pairs:
+            if not stack or stack[-1] != pairs[ch]:
+                return {"valid": False, "error": f"Zeichen {i}: unerwartetes '{ch}'"}
+            stack.pop()
+    if stack:
+        return {"valid": False, "error": f"Nicht geschlossene Klammer: '{stack[-1]}'"}
+    return {"valid": True, "error": None}
+
+
+def validate_code(code: str, language: str) -> dict:
+    """Dispatcht Validierung je nach Sprache."""
+    if language in ("python", "py"):
+        return validate_python_syntax(code)
+    elif language in ("javascript", "js", "typescript", "ts"):
+        return validate_javascript_syntax(code)
+    # HTML braucht keine Syntax-Validierung
+    return {"valid": True, "error": None}
+
+
+def wait_for_health(app_id: int, timeout: int = 30) -> dict:
+    """Wartet bis ein Container healthy ist oder timeout erreicht."""
+    import time
+    start = time.time()
+    while time.time() - start < timeout:
+        status = get_app_status(app_id)
+        container_status = status.get("container_status", "")
+        if container_status == "running":
+            # Health-Check via Docker
+            try:
+                conn = get_db()
+                cur = conn.cursor()
+                cur.execute("SELECT container_id FROM deployed_apps WHERE id = %s", (app_id,))
+                row = cur.fetchone()
+                cur.close()
+                conn.close()
+                if row and row[0]:
+                    result = subprocess.run(
+                        ["docker", "inspect", "--format", "{{.State.Health.Status}}", row[0]],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    health = result.stdout.strip()
+                    if health == "healthy":
+                        return {"healthy": True, "error": None}
+                    elif health == "unhealthy":
+                        # Logs holen fuer Fehlerdetails
+                        logs = get_container_logs(app_id, tail=20)
+                        return {"healthy": False, "error": f"Container unhealthy. Logs:\n{logs}"}
+            except Exception as e:
+                logger.warning(f"Health-Check Fehler: {e}")
+        elif container_status in ("error", "failed"):
+            error_log = status.get("error_log", "Unbekannter Fehler")
+            return {"healthy": False, "error": f"Container-Fehler: {error_log}"}
+        time.sleep(3)
+    return {"healthy": False, "error": f"Timeout nach {timeout}s — Container nicht healthy"}
+
+
+async def fix_code_with_ai(code: str, language: str, error: str, title: str, employee: dict) -> str:
+    """Sendet fehlerhaften Code + Fehlermeldung an die KI zur Reparatur."""
+    agent_name = employee.get("name", "NEXUS")
+    system_prompt = AGENT_PROMPTS.get(agent_name, AGENT_PROMPTS["NEXUS"])
+
+    user_msg = f"""Der folgende {language}-Code fuer die App "{title}" hat einen Fehler.
+
+FEHLER:
+{error}
+
+AKTUELLER CODE:
+```{language}
+{code}
+```
+
+Repariere den Code. Beachte:
+- Der Server MUSS auf Port 80 lauschen (host 0.0.0.0)
+- Es MUSS einen GET /health Endpunkt geben
+- EINE EINZIGE Datei, keine externen Module
+- Keine pip install / npm install Zeilen im Code
+- Alle Imports am Anfang der Datei
+
+Antworte NUR mit dem reparierten Code in einem Code-Block. Keine Erklaerung."""
+
+    response = await think(system_prompt, user_msg, max_tokens=4096)
+    fixed_code = _extract_single_code_block(response)
+    return fixed_code if fixed_code else code
+
+
+def _extract_single_code_block(text: str) -> str:
+    """Extrahiert den ersten Code-Block aus einer KI-Antwort."""
+    matches = re.findall(r'```(?:\w+)?\n(.*?)```', text, re.DOTALL)
+    if matches:
+        return matches[0].strip()
+    # Fallback: ganzer Text wenn kein Code-Block
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.split("\n", 1)[-1]
+    if stripped.endswith("```"):
+        stripped = stripped.rsplit("```", 1)[0]
+    return stripped.strip()
+
+
+def _update_app_code(app_id: int, new_code: str):
+    """Aktualisiert den Code einer App in der Datenbank."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE deployed_apps SET code = %s, updated_at = NOW() WHERE id = %s",
+        (new_code, app_id)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+async def build_test_fix_loop(app_id: int, code: str, language: str, title: str, employee: dict, max_retries: int = 3) -> dict:
+    """
+    Build-Test-Fix-Pipeline:
+    1. Syntax validieren
+    2. Docker-Container deployen
+    3. Health-Check abwarten
+    4. Bei Fehler: Code an KI senden → reparieren → erneut versuchen
+    Max. max_retries Versuche.
+    """
+    current_code = code
+    last_error = None
+
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"[BUILD-TEST-FIX] App #{app_id} — Versuch {attempt}/{max_retries}")
+        log_activity("ai", f"[NEXUS] Build-Test-Fix Versuch {attempt}/{max_retries} fuer App #{app_id}")
+
+        # 1. Syntax-Validierung
+        validation = validate_code(current_code, language)
+        if not validation["valid"]:
+            logger.warning(f"[BUILD-TEST-FIX] Syntax-Fehler: {validation['error']}")
+            if attempt >= max_retries:
+                return {"success": False, "error": f"Syntax-Fehler nach {max_retries} Versuchen: {validation['error']}", "attempts": attempt}
+            # KI-Fix anfordern
+            current_code = await fix_code_with_ai(current_code, language, f"Syntax-Fehler: {validation['error']}", title, employee)
+            _update_app_code(app_id, current_code)
+            continue
+
+        # 2. Docker-Deploy
+        _update_app_code(app_id, current_code)
+        deploy_result = deploy_app(app_id)
+        if not deploy_result.get("success"):
+            error_msg = deploy_result.get("error", "Deploy fehlgeschlagen")
+            logger.warning(f"[BUILD-TEST-FIX] Deploy-Fehler: {error_msg}")
+            if attempt >= max_retries:
+                return {"success": False, "error": f"Deploy-Fehler nach {max_retries} Versuchen: {error_msg}", "attempts": attempt}
+            current_code = await fix_code_with_ai(current_code, language, f"Docker-Build/Start-Fehler: {error_msg}", title, employee)
+            continue
+
+        # 3. Health-Check
+        health = wait_for_health(app_id, timeout=30)
+        if health["healthy"]:
+            logger.info(f"[BUILD-TEST-FIX] App #{app_id} erfolgreich deployed und healthy!")
+            log_activity("ai", f"[NEXUS] App #{app_id} erfolgreich deployed (Versuch {attempt})")
+            return {"success": True, "attempts": attempt}
+
+        # Nicht healthy — Container stoppen und Code fixen
+        last_error = health["error"]
+        logger.warning(f"[BUILD-TEST-FIX] Health-Check fehlgeschlagen: {last_error}")
+
+        # Container stoppen vor erneutem Versuch
+        try:
+            stop_app(app_id)
+            remove_app(app_id)
+        except Exception:
+            pass
+
+        if attempt >= max_retries:
+            return {"success": False, "error": f"Health-Check fehlgeschlagen nach {max_retries} Versuchen: {last_error}", "attempts": attempt}
+
+        # KI-Fix
+        current_code = await fix_code_with_ai(current_code, language, last_error, title, employee)
+
+    return {"success": False, "error": last_error or "Unbekannter Fehler", "attempts": max_retries}
+
+
 # ─── Auto-Deploy Generated Apps ──────────────────────────────────
 
-def deploy_generated_app(task_id: int, title: str, result: dict, employee: dict, project_id: int = None):
-    """Extrahiert Code aus Task-Ergebnis und deployed als eigenständige App."""
+def deploy_generated_app(task_id: int, title: str, result: dict, employee: dict, project_id: int = None) -> Optional[int]:
+    """Extrahiert Code aus Task-Ergebnis und speichert als App in DB. Gibt (app_id, language) zurueck."""
     summary = result.get("summary", "")
     if not summary:
-        return
+        return None
 
     # Extract code blocks from the AI response
     code_blocks = []
@@ -733,7 +961,7 @@ def deploy_generated_app(task_id: int, title: str, result: dict, employee: dict,
         remaining = remaining[end + 3:]
 
     if not code_blocks:
-        return
+        return None
 
     # Build a deployable HTML app from the code blocks
     app_name = title.replace("Technische Implementierung für '", "").replace("'", "").strip()
@@ -807,13 +1035,15 @@ def deploy_generated_app(task_id: int, title: str, result: dict, employee: dict,
         cur.close()
         conn.close()
 
-        log_activity("ai", f"[NEXUS] App deployed: {app_name} → /apps/{slug}",
+        log_activity("ai", f"[NEXUS] App gespeichert: {app_name} → /apps/{slug}",
                      project_id=project_id, employee_id=employee.get("id", 2),
                      details={"app_id": app_id, "slug": slug, "language": language})
-        logger.info(f"App #{app_id} deployed: {app_name} ({slug})")
+        logger.info(f"App #{app_id} gespeichert: {app_name} ({slug})")
+        return {"app_id": app_id, "language": language, "code": final_code}
 
     except Exception as e:
-        logger.error(f"Failed to deploy app: {e}")
+        logger.error(f"Failed to save app: {e}")
+        return None
 
 
 # ─── API Endpoints ────────────────────────────────────────────────
@@ -942,10 +1172,20 @@ async def execute_task(req: TaskRequest):
         except Exception as se:
             logger.error(f"Task summary failed: {se}")
 
-        # ─── Auto-Deploy generated apps ───
+        # ─── Auto-Deploy generated apps mit Build-Test-Fix Pipeline ───
         if task_type == "code_generation" and result.get("summary"):
             try:
-                deploy_generated_app(req.task_id, title, result, employee, project_id)
+                app_info = deploy_generated_app(req.task_id, title, result, employee, project_id)
+                if app_info:
+                    app_id = app_info["app_id"]
+                    language = app_info["language"]
+                    code = app_info["code"]
+                    log_activity("ai", f"[NEXUS] Starte Build-Test-Fix Pipeline fuer App #{app_id}")
+                    btf_result = await build_test_fix_loop(app_id, code, language, title, employee)
+                    if btf_result["success"]:
+                        log_activity("ai", f"[NEXUS] App #{app_id} erfolgreich deployed nach {btf_result['attempts']} Versuch(en)")
+                    else:
+                        log_activity("error", f"[NEXUS] App #{app_id} Deploy fehlgeschlagen: {btf_result['error']}")
             except Exception as de:
                 logger.error(f"Auto-deploy failed: {de}")
 
