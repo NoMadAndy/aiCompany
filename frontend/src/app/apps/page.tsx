@@ -110,9 +110,7 @@ export default function AppsPage() {
   }
 
   const getAppUrl = (app: DeployedApp) => {
-    if (app.deploy_type === 'docker' && app.port && app.container_status === 'running') {
-      return `http://${window.location.hostname}:${app.port}`
-    }
+    // Alle Apps laufen ueber den Proxy — auch Docker-Container
     return `/api/apps/serve?slug=${app.url_slug}`
   }
 
