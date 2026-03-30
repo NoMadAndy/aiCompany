@@ -8,6 +8,7 @@ Port-Range: 4000-4100 (konfigurierbar ueber APP_PORT_MIN / APP_PORT_MAX)
 """
 
 import os
+import re
 import socket
 import shutil
 import tempfile
@@ -172,115 +173,271 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0
     return "nginx:alpine"
 
 
+def _extract_python_deps(code: str) -> list[str]:
+    """Extrahiert pip-Pakete aus import-Statements."""
+    # Mapping von import-Namen zu pip-Paketnamen
+    IMPORT_TO_PIP = {
+        "fastapi": "fastapi uvicorn",
+        "flask": "flask",
+        "django": "django",
+        "requests": "requests",
+        "httpx": "httpx",
+        "pydantic": "pydantic",
+        "sqlalchemy": "sqlalchemy",
+        "sqlmodel": "sqlmodel",
+        "pandas": "pandas",
+        "numpy": "numpy",
+        "aiohttp": "aiohttp",
+        "starlette": "starlette",
+        "jinja2": "jinja2",
+        "bs4": "beautifulsoup4",
+        "PIL": "pillow",
+        "sklearn": "scikit-learn",
+        "matplotlib": "matplotlib",
+        "redis": "redis",
+        "celery": "celery",
+        "pyyaml": "pyyaml",
+        "dotenv": "python-dotenv",
+        "jwt": "pyjwt",
+        "cryptography": "cryptography",
+        "passlib": "passlib",
+    }
+    deps = set()
+    for line in code.splitlines():
+        line = line.strip()
+        if line.startswith("import ") or line.startswith("from "):
+            # Extrahiere Modulname
+            parts = line.replace("import ", "").replace("from ", "").split()[0].split(".")[0]
+            if parts in IMPORT_TO_PIP:
+                for pkg in IMPORT_TO_PIP[parts].split():
+                    deps.add(pkg)
+    return sorted(deps)
+
+
+def _detect_python_framework(code: str) -> str:
+    """Erkennt welches Web-Framework der Python-Code nutzt."""
+    code_lower = code.lower()
+    if "fastapi" in code_lower and ("app = fastapi" in code_lower or "app=fastapi" in code_lower
+                                     or "= fastapi(" in code_lower):
+        return "fastapi"
+    if "flask" in code_lower and ("app = flask" in code_lower or "app=flask" in code_lower
+                                   or "= flask(" in code_lower):
+        return "flask"
+    if "django" in code_lower:
+        return "django"
+    if "http.server" in code_lower or "socketserver" in code_lower:
+        return "stdlib_http"
+    return "script"
+
+
 def _create_python_app(build_dir: str, code: str, app_name: str):
-    """Erstellt eine Python-App mit eingebettetem HTTP-Server."""
+    """Erstellt eine Python-App — erkennt Framework und deployed entsprechend."""
+    framework = _detect_python_framework(code)
+    deps = _extract_python_deps(code)
+
     with open(os.path.join(build_dir, "app.py"), "w") as f:
         f.write(code)
 
-    # Einfacher Wrapper der die App ausfuehrt und Ergebnis zeigt
-    with open(os.path.join(build_dir, "server.py"), "w") as f:
-        f.write("""#!/usr/bin/env python3
-import http.server
-import socketserver
-import subprocess
-import sys
-import html as html_module
+    # Requirements-Datei
+    if deps:
+        with open(os.path.join(build_dir, "requirements.txt"), "w") as f:
+            f.write("\n".join(deps) + "\n")
 
-PORT = 80
+    if framework == "fastapi":
+        # FastAPI — direkt mit uvicorn starten
+        cmd = '["python3", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "80"]'
+        if "uvicorn" not in deps:
+            deps.append("uvicorn")
+            with open(os.path.join(build_dir, "requirements.txt"), "w") as f:
+                f.write("\n".join(sorted(set(deps))) + "\n")
+    elif framework == "flask":
+        # Flask — mit flask run starten
+        cmd = '["python3", "-m", "flask", "run", "--host", "0.0.0.0", "--port", "80"]'
+    elif framework == "stdlib_http":
+        # Eigener HTTP-Server — direkt starten
+        cmd = '["python3", "app.py"]'
+    else:
+        # Normales Script — mit HTTP-Wrapper ausfuehren
+        _write_python_wrapper(build_dir, app_name)
+        cmd = '["python3", "server.py"]'
 
-class AppHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"ok")
-            return
-
-        try:
-            result = subprocess.run(
-                [sys.executable, "/app/app.py"],
-                capture_output=True, text=True, timeout=30, cwd="/app"
-            )
-            output = result.stdout
-            errors = result.stderr
-        except subprocess.TimeoutExpired:
-            output = ""
-            errors = "Timeout: Script hat laenger als 30s gebraucht."
-        except Exception as e:
-            output = ""
-            errors = str(e)
-
-        escaped_out = html_module.escape(output)
-        escaped_err = html_module.escape(errors)
-
-        page = f\"\"\"<!DOCTYPE html>
-<html lang="de">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>APP_NAME_PLACEHOLDER</title>
-<style>
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{ font-family:'JetBrains Mono',monospace; background:#0f1117; color:#e2e8f0; padding:2rem; }}
-h1 {{ background:linear-gradient(135deg,#818cf8,#a78bfa); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:1rem; }}
-.output {{ background:#1a1b26; padding:1.5rem; border-radius:0.75rem; white-space:pre-wrap; font-size:0.875rem; line-height:1.6; border:1px solid #2d2d3d; }}
-.error {{ border-color:#ef4444; color:#fca5a5; margin-top:1rem; }}
-.meta {{ color:#64748b; font-size:0.8rem; margin-bottom:1.5rem; }}
-</style>
-</head>
-<body>
-<h1>APP_NAME_PLACEHOLDER</h1>
-<p class="meta">Python App — AI Company Docker Deploy</p>
-<div class="output">{escaped_out if escaped_out else '<em style="color:#64748b;">Keine Ausgabe</em>'}</div>
-{f'<div class="output error">{escaped_err}</div>' if escaped_err else ''}
-</body>
-</html>\"\"\"
-
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(page.encode())
-
-with socketserver.TCPServer(("", PORT), AppHandler) as httpd:
-    print(f"Python App Server auf Port {PORT}")
-    httpd.serve_forever()
-""".replace("APP_NAME_PLACEHOLDER", app_name.replace('"', '\\"')))
+    # Dockerfile
+    install_deps = ""
+    if deps:
+        install_deps = "COPY requirements.txt .\nRUN pip install --no-cache-dir -r requirements.txt\n"
 
     with open(os.path.join(build_dir, "Dockerfile"), "w") as f:
         f.write(f"""FROM python:3.12-slim
 LABEL {APP_LABEL}="true"
 LABEL {APP_LABEL}.name="{app_name}"
 WORKDIR /app
-COPY app.py .
-COPY server.py .
+{install_deps}COPY . .
 EXPOSE 80
-HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1/health')" || exit 1
-CMD ["python3", "server.py"]
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1/')" || exit 1
+CMD {cmd}
 """)
 
     return "python:3.12-slim"
 
 
+def _write_python_wrapper(build_dir: str, app_name: str):
+    """Schreibt einen HTTP-Wrapper fuer einfache Python-Scripts."""
+    safe_name = app_name.replace("'", "").replace('"', '').replace("\\", "")
+    server_code = (
+        '#!/usr/bin/env python3\n'
+        'import http.server, socketserver, subprocess, sys, html as html_module\n'
+        'PORT = 80\n'
+        'APP_NAME = "' + safe_name + '"\n'
+        'TEMPLATE = """<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">\n'
+        '<meta name="viewport" content="width=device-width,initial-scale=1.0">\n'
+        '<title>{name}</title>\n'
+        '<style>*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:system-ui,sans-serif;background:#0f1117;color:#e2e8f0;padding:2rem}}\n'
+        'h1{{background:linear-gradient(135deg,#818cf8,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:1rem}}\n'
+        '.out{{background:#1a1b26;padding:1.5rem;border-radius:.75rem;white-space:pre-wrap;font-size:.875rem;line-height:1.6;border:1px solid #2d2d3d;font-family:monospace}}\n'
+        '.err{{border-color:#ef4444;color:#fca5a5;margin-top:1rem}}</style></head>\n'
+        '<body><h1>{name}</h1>\n'
+        '<div class="out">{output}</div>{error_div}</body></html>"""\n'
+        '\n'
+        'class H(http.server.SimpleHTTPRequestHandler):\n'
+        '    def do_GET(self):\n'
+        '        if self.path == "/health":\n'
+        '            self.send_response(200)\n'
+        '            self.send_header("Content-Type", "text/plain")\n'
+        '            self.end_headers()\n'
+        '            self.wfile.write(b"ok")\n'
+        '            return\n'
+        '        try:\n'
+        '            r = subprocess.run([sys.executable, "/app/app.py"], capture_output=True, text=True, timeout=30, cwd="/app")\n'
+        '            out, err = r.stdout, r.stderr\n'
+        '        except subprocess.TimeoutExpired:\n'
+        '            out, err = "", "Timeout (30s)"\n'
+        '        except Exception as e:\n'
+        '            out, err = "", str(e)\n'
+        '        eo = html_module.escape(out) if out else \'<em style="color:#64748b;">Keine Ausgabe</em>\'\n'
+        '        ee = f\'<div class="out err">{html_module.escape(err)}</div>\' if err else ""\n'
+        '        page = TEMPLATE.format(name=APP_NAME, output=eo, error_div=ee)\n'
+        '        self.send_response(200)\n'
+        '        self.send_header("Content-Type", "text/html; charset=utf-8")\n'
+        '        self.end_headers()\n'
+        '        self.wfile.write(page.encode())\n'
+        '    def log_message(self, *a): pass\n'
+        '\n'
+        'with socketserver.TCPServer(("", PORT), H) as s:\n'
+        '    s.serve_forever()\n'
+    )
+    with open(os.path.join(build_dir, "server.py"), "w") as f:
+        f.write(server_code)
+
+
+
+def _detect_node_framework(code: str) -> str:
+    """Erkennt ob der JS-Code ein eigener Web-Server ist."""
+    code_lower = code.lower()
+    if "express" in code_lower and ("listen(" in code_lower or "createserver" in code_lower):
+        return "express"
+    if "createserver" in code_lower and ".listen(" in code_lower:
+        return "http_server"
+    if "koa" in code_lower and ".listen(" in code_lower:
+        return "koa"
+    return "script"
+
+
+def _extract_node_deps(code: str) -> list[str]:
+    """Extrahiert npm-Pakete aus require/import-Statements."""
+    KNOWN_PACKAGES = {
+        "express", "koa", "fastify", "hapi", "axios", "node-fetch",
+        "cors", "body-parser", "dotenv", "lodash", "moment", "dayjs",
+        "uuid", "ws", "socket.io", "mongoose", "sequelize", "pg",
+        "mysql2", "redis", "jsonwebtoken", "bcrypt", "chalk",
+    }
+    deps = set()
+    for line in code.splitlines():
+        line = line.strip()
+        # require('package') oder require("package")
+        if "require(" in line:
+            for q in ["'", '"']:
+                start = line.find(f"require({q}")
+                if start >= 0:
+                    start += len(f"require({q}")
+                    end = line.find(q, start)
+                    if end > start:
+                        pkg = line[start:end].split("/")[0]
+                        if pkg in KNOWN_PACKAGES:
+                            deps.add(pkg)
+        # import ... from 'package'
+        if "from " in line and ("'" in line or '"' in line):
+            for q in ["'", '"']:
+                idx = line.rfind(f"from {q}")
+                if idx >= 0:
+                    start = idx + len(f"from {q}")
+                    end = line.find(q, start)
+                    if end > start:
+                        pkg = line[start:end].split("/")[0]
+                        if pkg in KNOWN_PACKAGES:
+                            deps.add(pkg)
+    return sorted(deps)
+
+
 def _create_node_app(build_dir: str, code: str, app_name: str):
-    """Erstellt eine Node.js-App mit Express."""
+    """Erstellt eine Node.js-App — erkennt Framework und deployed entsprechend."""
+    framework = _detect_node_framework(code)
+    deps = _extract_node_deps(code)
+
+    # Wenn der Code einen eigenen Server hat, Port auf 80 patchen
+    if framework in ("express", "http_server", "koa"):
+        # Ersetze gaengige Port-Definitionen durch 80
+        code = re.sub(r'(listen\s*\(\s*)(3000|8080|8000|5000|4000)', r'\g<1>80', code)
+        code = re.sub(r"(PORT\s*=\s*(?:process\.env\.PORT\s*\|\|\s*)?)(3000|8080|8000|5000|4000)", r"\g<1>80", code)
+
     with open(os.path.join(build_dir, "app.js"), "w") as f:
         f.write(code)
 
+    # package.json fuer deps
+    if deps:
+        pkg_json = {"name": "aicompany-app", "version": "1.0.0", "dependencies": {d: "*" for d in deps}}
+        with open(os.path.join(build_dir, "package.json"), "w") as f:
+            json.dump(pkg_json, f)
+
+    if framework in ("express", "http_server", "koa"):
+        # Eigener Server — direkt starten
+        cmd = '["node", "app.js"]'
+    else:
+        # Script — mit HTTP-Wrapper ausfuehren
+        _write_node_wrapper(build_dir, app_name)
+        cmd = '["node", "server.js"]'
+
+    install_deps = ""
+    if deps:
+        install_deps = "COPY package.json .\nRUN npm install --production\n"
+
+    with open(os.path.join(build_dir, "Dockerfile"), "w") as f:
+        f.write(f"""FROM node:18-alpine
+LABEL {APP_LABEL}="true"
+LABEL {APP_LABEL}.name="{app_name}"
+WORKDIR /app
+{install_deps}COPY . .
+EXPOSE 80
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0.1/health || exit 1
+CMD {cmd}
+""")
+
+    return "node:18-alpine"
+
+
+def _write_node_wrapper(build_dir: str, app_name: str):
+    """Schreibt einen HTTP-Wrapper fuer einfache Node.js-Scripts."""
     with open(os.path.join(build_dir, "server.js"), "w") as f:
         f.write(f"""const http = require('http');
 const {{ execSync }} = require('child_process');
-const fs = require('fs');
-
 const PORT = 80;
 const APP_NAME = {json.dumps(app_name)};
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
 const server = http.createServer((req, res) => {{
   if (req.url === '/health') {{
     res.writeHead(200, {{ 'Content-Type': 'text/plain' }});
     return res.end('ok');
   }}
-
   let output = '', errors = '';
   try {{
     output = execSync('node /app/app.js', {{ timeout: 30000, cwd: '/app' }}).toString();
@@ -288,52 +445,21 @@ const server = http.createServer((req, res) => {{
     errors = e.stderr ? e.stderr.toString() : e.message;
     output = e.stdout ? e.stdout.toString() : '';
   }}
-
-  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-
-  const page = `<!DOCTYPE html>
-<html lang="de">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${{APP_NAME}}</title>
-<style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{font-family:'JetBrains Mono',monospace;background:#0f1117;color:#e2e8f0;padding:2rem}}
+  const page = `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${{APP_NAME}}</title>
+<style>*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:system-ui,sans-serif;background:#0f1117;color:#e2e8f0;padding:2rem}}
 h1{{background:linear-gradient(135deg,#818cf8,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:1rem}}
-.output{{background:#1a1b26;padding:1.5rem;border-radius:0.75rem;white-space:pre-wrap;font-size:.875rem;line-height:1.6;border:1px solid #2d2d3d}}
-.error{{border-color:#ef4444;color:#fca5a5;margin-top:1rem}}
-.meta{{color:#64748b;font-size:.8rem;margin-bottom:1.5rem}}
-</style>
-</head>
-<body>
-<h1>${{APP_NAME}}</h1>
-<p class="meta">Node.js App — AI Company Docker Deploy</p>
-<div class="output">${{output ? esc(output) : '<em style="color:#64748b;">Keine Ausgabe</em>'}}</div>
-${{errors ? '<div class="output error">'+esc(errors)+'</div>' : ''}}
-</body>
-</html>`;
-
+.out{{background:#1a1b26;padding:1.5rem;border-radius:.75rem;white-space:pre-wrap;font-size:.875rem;line-height:1.6;border:1px solid #2d2d3d;font-family:monospace}}
+.err{{border-color:#ef4444;color:#fca5a5;margin-top:1rem}}</style></head>
+<body><h1>${{APP_NAME}}</h1>
+<div class="out">${{output ? esc(output) : '<em style="color:#64748b;">Keine Ausgabe</em>'}}</div>
+${{errors ? '<div class="out err">'+esc(errors)+'</div>' : ''}}</body></html>`;
   res.writeHead(200, {{ 'Content-Type': 'text/html; charset=utf-8' }});
   res.end(page);
 }});
-
-server.listen(PORT, () => console.log('Node App Server auf Port ' + PORT));
+server.listen(PORT);
 """)
 
-    with open(os.path.join(build_dir, "Dockerfile"), "w") as f:
-        f.write(f"""FROM node:18-alpine
-LABEL {APP_LABEL}="true"
-LABEL {APP_LABEL}.name="{app_name}"
-WORKDIR /app
-COPY app.js .
-COPY server.js .
-EXPOSE 80
-HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0.1/health || exit 1
-CMD ["node", "server.js"]
-""")
-
-    return "node:18-alpine"
 
 
 # ─── Haupt-Deployment-Funktionen ────────────────────────────────
@@ -387,19 +513,20 @@ def deploy_app(app_id: int) -> dict:
     container_name = _container_name(app_id)
 
     try:
-        # Template basierend auf tatsaechlichem Inhalt waehlen.
-        # deploy_generated_app() in main.py wrapped ALLEN Code in HTML bevor
-        # er in die DB geschrieben wird. Daher: wenn der Code HTML enthaelt,
-        # immer als HTML-App deployen (nginx). Nur reiner Python/JS-Code
-        # ohne HTML-Wrapper bekommt einen Laufzeit-Container.
+        # Template-Auswahl: Sprache aus DB + Inhaltserkennung.
+        # Neue Apps speichern rohen Code mit korrektem language-Tag.
+        # Alte Apps (vor v0.7) haben alles in HTML gewrapped.
         code_lower = code.strip().lower()
         is_html = code_lower.startswith("<!doctype") or code_lower.startswith("<html") or "<html" in code_lower[:500]
 
-        if is_html:
-            base_image = _create_html_app(build_dir, code, app_name)
-        elif language in ("python", "py"):
+        if language in ("python", "py") and not is_html:
             base_image = _create_python_app(build_dir, code, app_name)
-        elif language in ("javascript", "js", "typescript", "ts", "code"):
+        elif language in ("javascript", "js", "typescript", "ts") and not is_html:
+            base_image = _create_node_app(build_dir, code, app_name)
+        elif is_html:
+            base_image = _create_html_app(build_dir, code, app_name)
+        elif language == "code" and not is_html:
+            # Alte "code"-Apps die keinen HTML-Wrapper haben — als Node.js versuchen
             base_image = _create_node_app(build_dir, code, app_name)
         else:
             base_image = _create_html_app(build_dir, code, app_name)

@@ -742,10 +742,12 @@ def deploy_generated_app(task_id: int, title: str, result: dict, employee: dict,
 
     slug = f"app-{task_id}"
 
-    # Determine the best code to deploy
+    # Determine the best code to deploy — rohen Code speichern, nicht in HTML wrappen.
+    # Der Deployer (app_deployer.py) kuemmert sich um die richtige Container-Art.
     html_code = None
-    main_code = None
-    all_code_parts = []
+    js_code = None
+    python_code = None
+    css_code = None
 
     for block in code_blocks:
         lang = block["lang"].lower()
@@ -753,82 +755,40 @@ def deploy_generated_app(task_id: int, title: str, result: dict, employee: dict,
 
         if lang in ("html", "htm") or "<html" in code.lower() or "<!doctype" in code.lower():
             html_code = code
-        elif lang in ("javascript", "js") or lang in ("typescript", "ts"):
-            main_code = code
-            all_code_parts.append(f"// === {lang} ===\n{code}")
+        elif lang in ("javascript", "js", "typescript", "ts"):
+            js_code = (js_code + "\n\n" + code) if js_code else code
         elif lang in ("python", "py"):
-            all_code_parts.append(f"# === Python ===\n{code}")
-        elif lang in ("css",):
-            all_code_parts.append(f"/* === CSS === */\n{code}")
-        else:
-            all_code_parts.append(code)
+            python_code = (python_code + "\n\n" + code) if python_code else code
+        elif lang == "css":
+            css_code = code
 
-    # Build the final deployable code
+    # Sprache und Code bestimmen
     if html_code:
-        # Already a full HTML file
+        # HTML mit optionalem eingebettetem CSS/JS
+        if css_code and "<style" not in html_code:
+            html_code = html_code.replace("</head>", f"<style>\n{css_code}\n</style>\n</head>")
+        if js_code and "<script" not in html_code:
+            html_code = html_code.replace("</body>", f"<script>\n{js_code}\n</script>\n</body>")
         final_code = html_code
         language = "html"
-    elif main_code:
-        # Wrap JS/TS in HTML
-        final_code = f"""<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{app_name}</title>
-  <style>
-    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-    body {{ font-family: system-ui, -apple-system, sans-serif; background: #0f1117; color: #e2e8f0; padding: 2rem; }}
-    h1 {{ background: linear-gradient(135deg, #818cf8, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 1rem; }}
-    .container {{ max-width: 800px; margin: 0 auto; }}
-    pre {{ background: #1a1b26; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; font-size: 0.875rem; }}
-    button {{ background: #4f46e5; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.5rem; cursor: pointer; margin: 0.5rem 0; }}
-    button:hover {{ background: #4338ca; }}
-    input, textarea {{ background: #1a1b26; border: 1px solid #2d2d3d; color: #e2e8f0; padding: 0.5rem; border-radius: 0.5rem; width: 100%; margin: 0.5rem 0; }}
-    #output {{ background: #1a1b26; padding: 1rem; border-radius: 0.5rem; min-height: 100px; margin-top: 1rem; white-space: pre-wrap; }}
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>{app_name}</h1>
-    <p style="color: #94a3b8; margin-bottom: 1.5rem;">Generiert von AI Company</p>
-    <div id="app"></div>
-    <div id="output"></div>
-  </div>
-  <script>
-{main_code}
-  </script>
-</body>
-</html>"""
-        language = "html"
+    elif python_code:
+        # Roher Python-Code — wird als Server deployed
+        final_code = python_code
+        language = "python"
+    elif js_code:
+        # Roher JS/TS-Code — wird als Server deployed
+        final_code = js_code
+        language = "javascript"
     else:
-        # Non-browser code — wrap in a code viewer
-        combined = "\n\n".join(all_code_parts)
-        escaped = combined.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        final_code = f"""<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{app_name}</title>
-  <style>
-    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-    body {{ font-family: 'JetBrains Mono', monospace; background: #0f1117; color: #e2e8f0; padding: 2rem; }}
-    h1 {{ background: linear-gradient(135deg, #818cf8, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 0.5rem; }}
-    .meta {{ color: #64748b; font-size: 0.875rem; margin-bottom: 1.5rem; }}
-    pre {{ background: #1a1b26; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto; font-size: 0.8rem; line-height: 1.6; border: 1px solid #2d2d3d; }}
-    .copy-btn {{ position: fixed; top: 1rem; right: 1rem; background: #4f46e5; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.5rem; cursor: pointer; font-size: 0.8rem; }}
-    .copy-btn:hover {{ background: #4338ca; }}
-  </style>
-</head>
-<body>
-  <h1>{app_name}</h1>
-  <p class="meta">Generiert von AI Company — Quellcode-Ansicht</p>
-  <button class="copy-btn" onclick="navigator.clipboard.writeText(document.querySelector('pre').textContent)">Code kopieren</button>
-  <pre><code>{escaped}</code></pre>
-</body>
-</html>"""
-        language = "code"
+        # Unbekannte Sprache — ersten Block nehmen
+        final_code = code_blocks[0]["code"]
+        lang = code_blocks[0]["lang"].lower()
+        if lang in ("python", "py"):
+            language = "python"
+        elif lang in ("javascript", "js", "typescript", "ts"):
+            language = "javascript"
+        else:
+            language = "code"
 
     # Save to database
     try:
