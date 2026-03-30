@@ -6,7 +6,7 @@ Sie verwaltet KI-Agenten, Projekte, Budgets und Assets. Die App kann selbststän
 KI-Modelle trainieren und große Aufgaben im Hintergrund abarbeiten.
 
 **Live URL**: https://aicompany.macherwerkstatt.cc
-**Ports**: Frontend 3002, Backend API 8002 (hinter Reverse Proxy)
+**Ports**: Frontend 3002, Backend API 8002 (hinter Reverse Proxy), App-Container 4000-4100
 **GPU**: NVIDIA RTX 2080 Super (8GB VRAM)
 
 ## Tech Stack
@@ -34,7 +34,13 @@ KI-Modelle trainieren und große Aufgaben im Hintergrund abarbeiten.
 │  ├── Code Generation                        │
 │  ├── Web Research                           │
 │  ├── Model Training                         │
-│  └── Background Jobs                        │
+│  ├── Background Jobs                        │
+│  └── App Deployer (Docker CLI)              │
+├─────────────────────────────────────────────┤
+│  Docker App-Container (Port 4000-4100)      │
+│  ├── nginx:alpine (HTML/JS Apps)            │
+│  ├── python:3.12-slim (Python Apps)         │
+│  └── node:18-alpine (Node.js Apps)          │
 ├─────────────────────────────────────────────┤
 │  PostgreSQL │ Redis │ File Watcher          │
 └─────────────────────────────────────────────┘
@@ -57,9 +63,11 @@ KI-Modelle trainieren und große Aufgaben im Hintergrund abarbeiten.
 ├── worker/                # Python AI Worker
 │   ├── tasks/             # Celery Tasks
 │   ├── agents/            # KI-Agenten
+│   ├── app_deployer.py    # Docker App-Deployment
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── docs/                  # Dokumentation
+│   └── APP-DEPLOYMENT.md  # Docker-Deploy-Doku
 └── scripts/               # Helper Scripts
 ```
 

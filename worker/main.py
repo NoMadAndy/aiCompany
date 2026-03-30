@@ -17,6 +17,7 @@ from tasks.research import web_search, search_scientific
 from ai_engine import think, think_structured, get_engine_status, load_local_model
 from agents.memory import extract_and_store_learnings, get_relevant_memories, update_agent_metrics
 from agents.self_evolve import propose_change, apply_change, rollback_change, analyze_and_propose, read_file, list_files
+from app_deployer import deploy_app, stop_app, restart_app, remove_app, get_app_status, get_container_logs, find_available_port, cleanup_orphaned_containers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai-worker")
@@ -1315,6 +1316,85 @@ async def get_summaries(project_id: int = None, type: str = None, limit: int = 2
         summaries.append(s)
 
     return {"summaries": summaries, "count": len(summaries)}
+
+
+# ─── App Deployment Endpoints ────────────────────────────────────
+
+class DeployRequest(BaseModel):
+    app_id: int
+
+class AppActionRequest(BaseModel):
+    app_id: int
+
+
+@app.post("/apps/deploy")
+async def api_deploy_app(req: DeployRequest, background_tasks: BackgroundTasks):
+    """Deployed eine App als Docker-Container mit automatischer Port-Zuweisung."""
+    logger.info(f"Deploy requested for app #{req.app_id}")
+    background_tasks.add_task(_do_deploy, req.app_id)
+    return {"status": "deploying", "app_id": req.app_id}
+
+
+async def _do_deploy(app_id: int):
+    result = deploy_app(app_id)
+    if result["success"]:
+        log_activity("ai", f"[DEPLOY] App #{app_id} deployed auf Port {result['port']}",
+                     details={"container_id": result["container_id"], "port": result["port"]})
+    else:
+        log_activity("error", f"[DEPLOY] App #{app_id} fehlgeschlagen: {result['error']}")
+
+
+@app.post("/apps/stop")
+async def api_stop_app(req: AppActionRequest):
+    """Stoppt den Docker-Container einer App."""
+    result = stop_app(req.app_id)
+    if result["success"]:
+        log_activity("ai", f"[DEPLOY] App #{req.app_id} gestoppt")
+    return result
+
+
+@app.post("/apps/restart")
+async def api_restart_app(req: AppActionRequest):
+    """Startet den Docker-Container einer App neu."""
+    result = restart_app(req.app_id)
+    if result["success"]:
+        log_activity("ai", f"[DEPLOY] App #{req.app_id} neugestartet")
+    return result
+
+
+@app.post("/apps/remove")
+async def api_remove_app(req: AppActionRequest):
+    """Entfernt Docker-Container und Image einer App."""
+    result = remove_app(req.app_id)
+    log_activity("ai", f"[DEPLOY] App #{req.app_id} Docker-Ressourcen entfernt")
+    return result
+
+
+@app.get("/apps/{app_id}/status")
+async def api_app_status(app_id: int):
+    """Holt den aktuellen Container-Status einer App."""
+    return get_app_status(app_id)
+
+
+@app.get("/apps/{app_id}/logs")
+async def api_app_logs(app_id: int, tail: int = 50):
+    """Holt die letzten Log-Zeilen eines App-Containers."""
+    logs = get_container_logs(app_id, tail)
+    return {"app_id": app_id, "logs": logs}
+
+
+@app.get("/apps/ports/available")
+async def api_available_port():
+    """Zeigt den naechsten verfuegbaren Port an."""
+    port = find_available_port()
+    return {"port": port, "available": port is not None}
+
+
+@app.post("/apps/cleanup")
+async def api_cleanup_apps():
+    """Entfernt verwaiste Docker-Container."""
+    cleanup_orphaned_containers()
+    return {"status": "cleaned"}
 
 
 if __name__ == "__main__":

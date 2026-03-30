@@ -46,6 +46,7 @@ services:
       - worker-data:/app/data
       - app-logs:/app/logs
       - model-cache:/app/models
+      - /var/run/docker.sock:/var/run/docker.sock
     deploy:
       resources:
         reservations:
@@ -73,6 +74,7 @@ services:
       - ./scripts/init.sql:/docker-entrypoint-initdb.d/01-init.sql
       - ./scripts/migrate-002-features.sql:/docker-entrypoint-initdb.d/02-features.sql
       - ./scripts/migrate-003-summaries.sql:/docker-entrypoint-initdb.d/03-summaries.sql
+      - ./scripts/migrate-004-docker-deploy.sql:/docker-entrypoint-initdb.d/04-docker-deploy.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aicompany}"]
       interval: 5s

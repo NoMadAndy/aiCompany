@@ -5,6 +5,49 @@ Alle wichtigen Änderungen an AI Company werden hier dokumentiert.
 Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.6.0] - 2026-03-30 — "Atlas"
+
+### Hinzugefuegt
+- **Docker-basiertes App-Deployment**: Apps werden als isolierte Docker-Container deployed
+  - Automatische Port-Pruefung und -Zuweisung (Bereich 4000-4100)
+  - Port-Verfuegbarkeit wird vor Deployment geprueft (TCP + Docker)
+  - Container-Lifecycle: Deploy, Stop, Restart, Remove
+  - Ressourcen-Limits: 256MB RAM, 0.5 CPU pro App
+  - Health-Checks fuer alle App-Container
+- **3 App-Templates**: Automatische Template-Auswahl nach Sprache
+  - HTML/JS: nginx:alpine fuer statische Apps
+  - Python: python:3.12-slim mit HTTP-Wrapper
+  - Node.js: node:18-alpine mit HTTP-Server
+- **Container-Management-UI**: Erweiterte Apps-Seite
+  - Live-Status-Anzeige (Running/Stopped/Building/Error)
+  - Deploy, Stop, Restart, Remove Buttons
+  - Container-Log-Viewer
+  - Direkter Link zu Docker-App (host:port)
+- **Worker App-Deployer** (`app_deployer.py`): Vollstaendiger Deployment-Service
+  - Port-Manager mit DB + Socket-Check
+  - Docker CLI Integration (via Socket-Mount)
+  - Orphaned-Container-Cleanup
+- **API-Endpoints fuer App-Management**:
+  - `POST /apps/deploy` — App als Docker-Container starten
+  - `POST /apps/stop` — Container stoppen
+  - `POST /apps/restart` — Container neustarten
+  - `POST /apps/remove` — Container und Image entfernen
+  - `GET /apps/{id}/status` — Container-Status abfragen
+  - `GET /apps/{id}/logs` — Container-Logs abrufen
+  - `GET /apps/ports/available` — Naechsten freien Port finden
+  - `POST /apps/cleanup` — Verwaiste Container aufraeumen
+- **Dokumentation**: `docs/APP-DEPLOYMENT.md` mit Architektur, Ablauf, Troubleshooting
+
+### Geaendert
+- Worker Dockerfile: Docker CLI installiert fuer Container-Management
+- docker-compose.yml: Docker-Socket gemountet, Migration 004 eingebunden
+- Apps-Seite: Komplett ueberarbeitet mit Docker-Controls
+- Apps-API: Erweitert um Docker-Felder (container_id, port, deploy_type, container_status)
+
+### Datenbank
+- Migration 004: `deployed_apps` erweitert um `container_id`, `port`, `deploy_type`, `container_status`, `docker_image`, `error_log`, `updated_at`
+- Unique-Index auf `port` (nur fuer laufende Apps)
+
 ## [0.5.0] - 2026-03-28 — "Prometheus"
 
 ### Hinzugefügt
