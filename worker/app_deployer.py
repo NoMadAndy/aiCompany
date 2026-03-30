@@ -387,15 +387,21 @@ def deploy_app(app_id: int) -> dict:
     container_name = _container_name(app_id)
 
     try:
-        # Template basierend auf Sprache waehlen
-        if language in ("html", "htm"):
+        # Template basierend auf tatsaechlichem Inhalt waehlen.
+        # deploy_generated_app() in main.py wrapped ALLEN Code in HTML bevor
+        # er in die DB geschrieben wird. Daher: wenn der Code HTML enthaelt,
+        # immer als HTML-App deployen (nginx). Nur reiner Python/JS-Code
+        # ohne HTML-Wrapper bekommt einen Laufzeit-Container.
+        code_lower = code.strip().lower()
+        is_html = code_lower.startswith("<!doctype") or code_lower.startswith("<html") or "<html" in code_lower[:500]
+
+        if is_html:
             base_image = _create_html_app(build_dir, code, app_name)
         elif language in ("python", "py"):
             base_image = _create_python_app(build_dir, code, app_name)
         elif language in ("javascript", "js", "typescript", "ts", "code"):
             base_image = _create_node_app(build_dir, code, app_name)
         else:
-            # Fallback: als HTML behandeln
             base_image = _create_html_app(build_dir, code, app_name)
 
         image_name = f"aicompany-app-{app_id}:latest"
