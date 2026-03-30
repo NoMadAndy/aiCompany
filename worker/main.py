@@ -134,18 +134,45 @@ Deine Expertise:
 
 WICHTIG — Regeln fuer Code-Generierung:
 1. Schreibe IMMER eine EINZIGE, vollstaendige Datei — kein Aufteilen auf mehrere Dateien/Module
-2. Der Code MUSS ein Web-Server sein der auf Port 80 lauscht
+2. Der Code MUSS ein Web-Server sein der auf Port 80 lauscht (host 0.0.0.0)
 3. Der Code MUSS einen GET / Endpunkt haben der eine HTML-Seite zurueckgibt
-4. Der Code MUSS einen GET /health Endpunkt haben der 200 OK zurueckgibt
+4. Der Code MUSS einen GET /health Endpunkt haben der {{"status": "ok"}} als JSON zurueckgibt
 5. Alle imports/requires muessen am Anfang stehen
 6. KEINE Platzhalter, KEINE TODOs, KEINE fehlenden Implementierungen
 7. KEINE pip install / npm install / Shell-Befehle im Code
 8. KEINE externen Dateien referenzieren (models.py etc.) — alles in EINER Datei
 9. Fuer Python: nutze FastAPI + uvicorn, app = FastAPI()
-10. Fuer JavaScript: nutze express, app.listen(80)
+10. Fuer JavaScript: nutze express, app.listen(80, '0.0.0.0')
 11. Nutze in-memory Daten statt Datenbank-Abhaengigkeiten
 12. Schreibe NUR den Code in einem einzigen ```python oder ```javascript Block
-13. Die HTML-Seite soll gut aussehen (dunkles Theme, modernes CSS)
+13. Die HTML-Seite soll gut aussehen (dunkles Theme, modernes CSS, responsive)
+14. NIEMALS eine reine HTML-Datei generieren — IMMER einen Server mit Backend-Logik
+15. Die App muss ECHTE Funktionalitaet haben (Berechnungen, Daten, Interaktion)
+
+BEISPIEL-STRUKTUR (Python):
+```
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse, JSONResponse
+import uvicorn
+
+app = FastAPI()
+data = {{}}  # In-memory Daten
+
+@app.get("/health")
+def health():
+    return {{"status": "ok"}}
+
+@app.get("/", response_class=HTMLResponse)
+def root():
+    return \"\"\"<!DOCTYPE html><html>...</html>\"\"\"
+
+@app.get("/api/items")
+def get_items():
+    return data
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=80)
+```
 
 Antworte auf Deutsch. Sei technisch praezise.""",
 
@@ -310,15 +337,20 @@ async def execute_code_generation(title: str, employee: dict) -> dict:
 
     user_msg = f"""Aufgabe: {title}
 
-Erstelle eine vollstaendige, deploybare Web-Applikation als EINE EINZIGE Datei.
+Erstelle eine vollstaendige, deploybare Web-Applikation als EINE EINZIGE Python-Datei mit FastAPI.
 
-Anforderungen:
-- Ein Web-Server (FastAPI fuer Python, Express fuer JS) der auf Port 80 lauscht
-- Ein GET / Endpunkt mit einer schoenen HTML-Seite (dunkles Theme) die die Funktionalitaet zeigt
-- Ein GET /health Endpunkt der {{"status": "ok"}} zurueckgibt
-- Alle Logik in einer Datei, alle Imports am Anfang
-- Kein externer State (keine Datenbank noetig, nutze in-memory Daten)
-- Keine externen Module-Dateien (kein models.py o.ae.)
+PFLICHT-Anforderungen:
+- FastAPI Web-Server der auf Port 80 lauscht (host 0.0.0.0)
+- GET / Endpunkt: schoene HTML-Seite mit dunklem Theme und ECHTER Funktionalitaet
+- GET /health Endpunkt: gibt {{"status": "ok"}} als JSON zurueck
+- Mindestens 2 API-Endpunkte mit Backend-Logik (z.B. GET /api/data, POST /api/action)
+- In-memory Datenstruktur mit Beispieldaten
+- Alle Logik in EINER Datei, alle Imports am Anfang
+- KEINE externen Dateien, KEINE Datenbank, KEINE pip install Zeilen
+- Die HTML-Seite MUSS interaktiv sein (JavaScript fetch() zu den API-Endpunkten)
+
+WICHTIG: Generiere KEINEN reinen HTML-Code. Der Code MUSS ein Python-Server sein
+der HTML als Response zurueckliefert. Beginne den Code-Block mit ```python.
 
 Antworte mit GENAU EINEM Code-Block. Keine Erklaerung vor oder nach dem Code."""
 
@@ -774,10 +806,35 @@ def validate_code(code: str, language: str) -> dict:
     return {"valid": True, "error": None}
 
 
-def wait_for_health(app_id: int, timeout: int = 30) -> dict:
+def validate_code_quality(code: str, language: str) -> dict:
+    """Pre-Deployment Qualitaetspruefung: Server-Struktur, Endpunkte, Port."""
+    issues = []
+
+    if language in ("python", "py"):
+        if '"/health"' not in code and "'/health'" not in code and "@app.get(\"/health" not in code:
+            issues.append("Fehlender /health Endpunkt")
+        if "80" not in code:
+            issues.append("Port 80 nicht im Code gefunden")
+        if "fastapi" not in code.lower() and "flask" not in code.lower() and "http.server" not in code.lower():
+            issues.append("Kein Web-Framework erkannt (FastAPI/Flask)")
+        if "0.0.0.0" not in code:
+            issues.append("Server muss auf 0.0.0.0 lauschen (nicht localhost)")
+    elif language in ("javascript", "js"):
+        if "/health" not in code:
+            issues.append("Fehlender /health Endpunkt")
+        if ".listen(" not in code:
+            issues.append("Kein .listen() Aufruf gefunden")
+        if "80" not in code:
+            issues.append("Port 80 nicht im Code gefunden")
+
+    return {"valid": len(issues) == 0, "issues": issues}
+
+
+def wait_for_health(app_id: int, timeout: int = 60) -> dict:
     """Wartet bis ein Container healthy ist oder timeout erreicht."""
     import time
     start = time.time()
+    time.sleep(8)  # Container braucht Zeit zum Starten
     while time.time() - start < timeout:
         status = get_app_status(app_id)
         container_status = status.get("container_status", "")
@@ -807,7 +864,7 @@ def wait_for_health(app_id: int, timeout: int = 30) -> dict:
         elif container_status in ("error", "failed"):
             error_log = status.get("error_log", "Unbekannter Fehler")
             return {"healthy": False, "error": f"Container-Fehler: {error_log}"}
-        time.sleep(3)
+        time.sleep(5)
     return {"healthy": False, "error": f"Timeout nach {timeout}s — Container nicht healthy"}
 
 
@@ -889,10 +946,22 @@ async def build_test_fix_loop(app_id: int, code: str, language: str, title: str,
             logger.warning(f"[BUILD-TEST-FIX] Syntax-Fehler: {validation['error']}")
             if attempt >= max_retries:
                 return {"success": False, "error": f"Syntax-Fehler nach {max_retries} Versuchen: {validation['error']}", "attempts": attempt}
-            # KI-Fix anfordern
             current_code = await fix_code_with_ai(current_code, language, f"Syntax-Fehler: {validation['error']}", title, employee)
             _update_app_code(app_id, current_code)
             continue
+
+        # 1b. Qualitaets-Check (Endpunkte, Port, Framework)
+        quality = validate_code_quality(current_code, language)
+        if not quality["valid"]:
+            issues_str = ", ".join(quality["issues"])
+            logger.warning(f"[BUILD-TEST-FIX] Qualitaets-Probleme: {issues_str}")
+            current_code = await fix_code_with_ai(
+                current_code, language,
+                f"Code-Qualitaet mangelhaft: {issues_str}. Bitte behebe diese Probleme.",
+                title, employee
+            )
+            _update_app_code(app_id, current_code)
+            # Zaehlt nicht als Retry — weiter zum Deploy
 
         # 2. Docker-Deploy
         _update_app_code(app_id, current_code)
@@ -981,32 +1050,41 @@ def deploy_generated_app(task_id: int, title: str, result: dict, employee: dict,
         lang = block["lang"].lower()
         code = block["code"]
 
-        if lang in ("html", "htm") or "<html" in code.lower() or "<!doctype" in code.lower():
-            html_code = code
+        # Explizites Sprach-Tag hat Prioritaet
+        if lang in ("python", "py"):
+            python_code = (python_code + "\n\n" + code) if python_code else code
         elif lang in ("javascript", "js", "typescript", "ts"):
             js_code = (js_code + "\n\n" + code) if js_code else code
-        elif lang in ("python", "py"):
-            python_code = (python_code + "\n\n" + code) if python_code else code
+        elif lang in ("html", "htm"):
+            html_code = code
         elif lang == "css":
             css_code = code
+        else:
+            # Content-Sniffing nur fuer ungetaggte Bloecke
+            code_start = code.strip()[:50].lower()
+            if code_start.startswith("<!doctype") or code_start.startswith("<html"):
+                html_code = code
+            elif "import " in code[:200] and ("fastapi" in code.lower() or "flask" in code.lower()):
+                python_code = (python_code + "\n\n" + code) if python_code else code
+            elif "require(" in code[:200] or "express" in code.lower()[:200]:
+                js_code = (js_code + "\n\n" + code) if js_code else code
 
-    # Sprache und Code bestimmen
-    if html_code:
-        # HTML mit optionalem eingebettetem CSS/JS
+    # Sprache und Code bestimmen — Python/JS haben Prioritaet ueber HTML
+    # weil Server-Code immer HTML als Response enthaelt
+    if python_code:
+        final_code = python_code
+        language = "python"
+    elif js_code:
+        final_code = js_code
+        language = "javascript"
+    elif html_code:
+        # Reine HTML-App mit optionalem CSS/JS
         if css_code and "<style" not in html_code:
             html_code = html_code.replace("</head>", f"<style>\n{css_code}\n</style>\n</head>")
         if js_code and "<script" not in html_code:
             html_code = html_code.replace("</body>", f"<script>\n{js_code}\n</script>\n</body>")
         final_code = html_code
         language = "html"
-    elif python_code:
-        # Roher Python-Code — wird als Server deployed
-        final_code = python_code
-        language = "python"
-    elif js_code:
-        # Roher JS/TS-Code — wird als Server deployed
-        final_code = js_code
-        language = "javascript"
     else:
         # Unbekannte Sprache — ersten Block nehmen
         final_code = code_blocks[0]["code"]
@@ -1064,6 +1142,128 @@ async def gpu_status():
 async def ai_status():
     """Get AI engine status"""
     return get_engine_status()
+
+
+@app.get("/system/metrics")
+async def system_metrics():
+    """Umfassende System-Metriken fuer Monitoring-Dashboard."""
+    conn = None
+    try:
+        # AI & GPU Status
+        ai = get_engine_status()
+        gpu = check_gpu()
+
+        # Server-Metriken (Linux /proc)
+        server = {"cpu_percent": 0.0, "memory_used_gb": 0.0, "memory_total_gb": 0.0, "uptime_hours": 0.0}
+        try:
+            load = os.getloadavg()
+            cpu_count = os.cpu_count() or 1
+            server["cpu_percent"] = round((load[0] / cpu_count) * 100, 1)
+            with open("/proc/meminfo") as f:
+                meminfo = {}
+                for line in f:
+                    parts = line.split(":")
+                    if len(parts) == 2:
+                        meminfo[parts[0].strip()] = int(parts[1].strip().split()[0])
+                total_kb = meminfo.get("MemTotal", 0)
+                avail_kb = meminfo.get("MemAvailable", meminfo.get("MemFree", 0))
+                server["memory_total_gb"] = round(total_kb / 1048576, 1)
+                server["memory_used_gb"] = round((total_kb - avail_kb) / 1048576, 1)
+            with open("/proc/uptime") as f:
+                server["uptime_hours"] = round(float(f.read().split()[0]) / 3600, 1)
+        except Exception:
+            pass
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        # Projekt-Fortschritt
+        cur.execute("""
+            SELECT p.id, p.name, p.status, p.budget, p.spent,
+                   COUNT(t.id) as tasks_total,
+                   COUNT(CASE WHEN t.status='completed' THEN 1 END) as tasks_completed,
+                   COUNT(CASE WHEN t.status='running' THEN 1 END) as tasks_running,
+                   COUNT(CASE WHEN t.status='failed' THEN 1 END) as tasks_failed
+            FROM projects p
+            LEFT JOIN tasks t ON t.project_id = p.id
+            GROUP BY p.id, p.name, p.status, p.budget, p.spent
+            ORDER BY p.id
+        """)
+        projects = []
+        for row in cur.fetchall():
+            total = row[5] or 0
+            completed = row[6] or 0
+            projects.append({
+                "id": row[0], "name": row[1], "status": row[2],
+                "budget": float(row[3] or 0), "spent": float(row[4] or 0),
+                "tasks_total": total, "tasks_completed": completed,
+                "tasks_running": row[7] or 0, "tasks_failed": row[8] or 0,
+                "progress": round((completed / total * 100) if total > 0 else 0, 1),
+            })
+
+        # Agenten-Performance
+        cur.execute("""
+            SELECT e.id, e.name, e.role, e.status,
+                   COUNT(t.id) as tasks_total,
+                   COUNT(CASE WHEN t.status='completed' THEN 1 END) as tasks_completed,
+                   COUNT(CASE WHEN t.status='failed' THEN 1 END) as tasks_failed,
+                   COUNT(CASE WHEN t.status='running' THEN 1 END) as tasks_running
+            FROM employees e
+            LEFT JOIN tasks t ON t.employee_id = e.id
+            GROUP BY e.id, e.name, e.role, e.status
+            ORDER BY e.id
+        """)
+        agents = []
+        for row in cur.fetchall():
+            total = row[4] or 0
+            completed = row[5] or 0
+            failed = row[6] or 0
+            success_rate = round((completed / total * 100) if total > 0 else 0, 1)
+            agents.append({
+                "id": row[0], "name": row[1], "role": row[2], "status": row[3],
+                "tasks_total": total, "tasks_completed": completed,
+                "tasks_failed": failed, "tasks_running": row[7] or 0,
+                "success_rate": success_rate,
+            })
+
+        # Container-Uebersicht
+        cur.execute("""
+            SELECT container_status, COUNT(*)
+            FROM deployed_apps WHERE deploy_type = 'docker'
+            GROUP BY container_status
+        """)
+        containers = {"running": 0, "stopped": 0, "error": 0, "building": 0, "total": 0}
+        for row in cur.fetchall():
+            status = row[0] or "none"
+            count = row[1]
+            if status in containers:
+                containers[status] = count
+            containers["total"] += count
+
+        # Apps gesamt
+        cur.execute("SELECT COUNT(*) FROM deployed_apps WHERE status = 'active'")
+        containers["apps_total"] = cur.fetchone()[0]
+
+        cur.close()
+        conn.close()
+
+        return {
+            "ai": ai,
+            "gpu": gpu,
+            "server": server,
+            "projects": projects,
+            "agents": agents,
+            "containers": containers,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        logger.error(f"System metrics error: {e}")
+        return {"error": str(e), "timestamp": datetime.now().isoformat()}
 
 
 @app.post("/ai/preload")

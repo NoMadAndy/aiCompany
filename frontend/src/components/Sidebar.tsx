@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, FolderKanban, Users, Bot, FileText,
   ScrollText, Activity, Settings, ChevronLeft, ChevronRight,
-  Wallet, Beaker, Menu, X, GitBranch, LogOut, User, ClipboardList, Rocket
+  Wallet, Beaker, Menu, X, GitBranch, LogOut, User, ClipboardList, Rocket, Monitor
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/components/AuthProvider'
@@ -24,6 +24,7 @@ const navItems = [
   { href: '/logs', label: 'Logs', icon: ScrollText },
   { href: '/changelog', label: 'Changelog', icon: FileText },
   { href: '/live', label: 'Live-View', icon: Activity },
+  { href: '/monitoring', label: 'Monitoring', icon: Monitor },
   { href: '/settings', label: 'Einstellungen', icon: Settings },
 ]
 

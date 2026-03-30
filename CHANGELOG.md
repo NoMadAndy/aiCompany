@@ -5,6 +5,31 @@ Alle wichtigen Änderungen an AI Company werden hier dokumentiert.
 Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.7.0] - 2026-03-30 — "Argus"
+
+### Hinzugefuegt
+- **System-Monitoring Dashboard** (/monitoring): Echtzeit-Ueberwachung aller Systeme
+  - Aktives KI-Modell (Claude API / Lokal) mit Status-Anzeige
+  - GPU-Auslastung: VRAM-Verbrauch, CUDA-Version, Geraet
+  - Server-Metriken: CPU, RAM, Uptime mit Fortschrittsbalken
+  - Projekt-Fortschritt: Tasks pro Projekt mit Completion-Rate
+  - Agenten-Performance: Erfolgsrate, aktive/erledigte/fehlgeschlagene Tasks
+  - Container-Uebersicht: Running/Stopped/Building/Error Zaehler
+  - Auto-Refresh alle 10 Sekunden
+- **Worker-Endpoint /system/metrics**: Aggregiert alle Metriken in einem Aufruf
+
+### Verbessert
+- **Code-Generierung**: KI erzeugt jetzt echte FastAPI/Express-Server statt HTML
+  - NEXUS-Prompt mit Beispiel-Struktur und 15 strengen Regeln
+  - Pflicht: mindestens 2 API-Endpunkte mit Backend-Logik
+  - Pflicht: interaktive HTML-Seite mit fetch()-Aufrufen
+- **Sprach-Erkennung**: Python/JS haben Prioritaet ueber HTML bei Deployment
+  - Explizites Sprach-Tag (```python) wird bevorzugt
+  - Content-Sniffing nur fuer ungetaggte Code-Bloecke
+- **Code-Qualitaets-Check**: Prueft /health Endpunkt, Port 80, Framework vor Deploy
+- **Health-Check**: 60s Timeout (statt 30s), 8s Boot-Delay, 5s Poll-Intervall
+- **Lokales Modell**: Token-Limit von 1024 auf 2048 erhoeht
+
 ## [0.6.1] - 2026-03-30 — "Atlas"
 
 ### Hinzugefuegt

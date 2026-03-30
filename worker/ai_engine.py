@@ -168,7 +168,7 @@ async def think(system_prompt: str, user_message: str, max_tokens: int = 2048) -
         return result
 
     # Fall back to local model
-    result = await generate_with_local(system_prompt, user_message, min(max_tokens, 1024))
+    result = await generate_with_local(system_prompt, user_message, min(max_tokens, 2048))
     if result:
         logger.info("Response generated via local model")
         return result
