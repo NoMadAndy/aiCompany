@@ -166,7 +166,7 @@ LABEL {APP_LABEL}.name="{app_name}"
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY html/ /usr/share/nginx/html/
 EXPOSE 80
-HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO- http://localhost/ || exit 1
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0.1/ || exit 1
 """)
 
     return "nginx:alpine"
@@ -255,7 +255,7 @@ WORKDIR /app
 COPY app.py .
 COPY server.py .
 EXPOSE 80
-HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost/health')" || exit 1
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1/health')" || exit 1
 CMD ["python3", "server.py"]
 """)
 
@@ -329,7 +329,7 @@ WORKDIR /app
 COPY app.js .
 COPY server.js .
 EXPOSE 80
-HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO- http://localhost/health || exit 1
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0.1/health || exit 1
 CMD ["node", "server.js"]
 """)
 
