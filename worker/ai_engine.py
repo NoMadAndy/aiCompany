@@ -10,6 +10,7 @@ Each agent has a system prompt that shapes their personality and expertise.
 """
 
 import os
+import re
 import json
 import hashlib
 import logging
@@ -65,6 +66,9 @@ def _get_claude_model() -> str:
         return _cached_claude_model
     _claude_model_last_check = now
 
+    # Gueltige Modell-IDs (ohne Datums-Suffix-Varianten die 404 erzeugen)
+    valid_model_ids = {m["id"] for m in FALLBACK_CLAUDE_MODELS}
+
     try:
         import psycopg2
         conn = psycopg2.connect(os.environ.get("DATABASE_URL", "postgresql://aicompany:aicompany@db:5432/aicompany"))
@@ -77,9 +81,20 @@ def _get_claude_model() -> str:
             settings = row[0] if isinstance(row[0], dict) else json.loads(row[0])
             model = settings.get("CLAUDE_MODEL")
             if model:
-                _cached_claude_model = model
-                logger.info(f"Claude-Modell aus DB: {model}")
-                return model
+                # Validierung: Modell-ID muss bekannt sein oder zumindest mit "claude-" beginnen
+                if model in valid_model_ids:
+                    _cached_claude_model = model
+                    logger.info(f"Claude-Modell aus DB: {model}")
+                    return model
+                else:
+                    # Versuche die Basis-ID zu extrahieren (z.B. claude-sonnet-4-6-20250514 -> claude-sonnet-4-6)
+                    base_id = re.sub(r'-\d{8}$', '', model)
+                    if base_id in valid_model_ids:
+                        logger.warning(f"Modell-ID '{model}' korrigiert zu '{base_id}'")
+                        _cached_claude_model = base_id
+                        return base_id
+                    else:
+                        logger.warning(f"Unbekannte Modell-ID '{model}' in DB — verwende Default")
     except Exception as e:
         logger.warning(f"Claude-Modell aus DB laden fehlgeschlagen: {e}")
 
