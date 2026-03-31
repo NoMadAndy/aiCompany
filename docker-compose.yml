@@ -104,13 +104,14 @@ services:
     image: node:18-alpine
     working_dir: /watch
     command: >-
-      sh -c "npm install -g chokidar-cli &&
-      chokidar '**/*.ts' '**/*.tsx' '**/*.py' '**/*.json' '**/*.css'
-      -c 'echo CHANGE_DETECTED'
-      --ignore node_modules --ignore .next --ignore __pycache__"
+      sh -c "apk add --no-cache docker-cli &&
+      npm install -g chokidar-cli &&
+      sh /watch/scripts/watcher.sh"
     volumes:
       - ./frontend/src:/watch/frontend/src:ro
       - ./worker:/watch/worker:ro
+      - ./scripts/watcher.sh:/watch/scripts/watcher.sh:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     networks:
       - aicompany
