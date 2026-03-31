@@ -17,7 +17,7 @@ import redis
 import httpx
 
 from tasks.research import web_search, search_scientific
-from ai_engine import think, think_with_meta, think_structured, get_engine_status, load_local_model, test_claude_api
+from ai_engine import think, think_with_meta, think_structured, get_engine_status, load_local_model, test_claude_api, refresh_api_key_cache
 from agents.memory import extract_and_store_learnings, get_relevant_memories, update_agent_metrics
 from agents.self_evolve import propose_change, apply_change, rollback_change, analyze_and_propose, read_file, list_files
 from app_deployer import deploy_app, stop_app, restart_app, remove_app, get_app_status, get_container_logs, find_available_port, cleanup_orphaned_containers
@@ -1153,6 +1153,14 @@ async def api_test():
     """Testet die Claude API mit einer minimalen Anfrage."""
     result = await test_claude_api()
     return result
+
+
+@app.post("/ai/refresh")
+async def api_refresh_key():
+    """Setzt den API-Key-Cache zurueck und laedt den Key neu aus der DB."""
+    refresh_api_key_cache()
+    status = get_engine_status()
+    return {"refreshed": True, "active_backend": status["active_backend"], "claude_api": status["claude_api"]}
 
 
 @app.get("/system/metrics")

@@ -25,6 +25,15 @@ _local_tokenizer = None
 _model_loading = False
 _model_name = os.environ.get("LOCAL_MODEL", "Qwen/Qwen2.5-3B-Instruct")
 _cached_api_key = None
+_api_key_last_check = 0  # Timestamp des letzten DB-Lookups
+
+
+def refresh_api_key_cache():
+    """Setzt den API-Key-Cache zurueck, damit beim naechsten Aufruf neu aus der DB geladen wird."""
+    global _cached_api_key, _api_key_last_check
+    _cached_api_key = None
+    _api_key_last_check = 0
+    logger.info("API-Key-Cache zurueckgesetzt")
 
 
 def _decrypt_aes_gcm(ciphertext: str) -> str:
@@ -59,10 +68,13 @@ def _decrypt_aes_gcm(ciphertext: str) -> str:
 
 
 def _load_api_key_from_db() -> str:
-    """Laedt den ANTHROPIC_API_KEY aus der users-Tabelle (verschluesselt gespeichert)."""
-    global _cached_api_key
-    if _cached_api_key:
+    """Laedt den ANTHROPIC_API_KEY aus der users-Tabelle (verschluesselt gespeichert). Cache: 60s."""
+    import time
+    global _cached_api_key, _api_key_last_check
+    now = time.time()
+    if _cached_api_key and (now - _api_key_last_check) < 60:
         return _cached_api_key
+    _api_key_last_check = now
     try:
         import psycopg2
         conn = psycopg2.connect(os.environ.get("DATABASE_URL", "postgresql://aicompany:aicompany@db:5432/aicompany"))
@@ -324,7 +336,13 @@ async def test_claude_api() -> dict:
             }
         }
     except Exception as e:
-        return {"success": False, "error": str(e), "latency_ms": 0}
+        error_msg = str(e)
+        # Klarere Fehlermeldung fuer haeufige Probleme
+        if "credit balance" in error_msg.lower() or "billing" in error_msg.lower():
+            error_msg = "Kein API-Guthaben. Die Anthropic API (console.anthropic.com) braucht eigenes Guthaben — ein Claude Max/Pro Abo (claude.ai) reicht dafuer nicht. Bitte auf console.anthropic.com Credits kaufen."
+        elif "invalid api key" in error_msg.lower() or "authentication" in error_msg.lower():
+            error_msg = "Ungueltiger API-Key. Bitte auf console.anthropic.com pruefen."
+        return {"success": False, "error": error_msg, "latency_ms": 0}
 
 
 def get_engine_status() -> dict:
