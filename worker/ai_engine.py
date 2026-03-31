@@ -11,6 +11,7 @@ Each agent has a system prompt that shapes their personality and expertise.
 
 import os
 import json
+import hashlib
 import logging
 import asyncio
 from typing import Optional
@@ -23,11 +24,72 @@ _local_model = None
 _local_tokenizer = None
 _model_loading = False
 _model_name = os.environ.get("LOCAL_MODEL", "Qwen/Qwen2.5-3B-Instruct")
+_cached_api_key = None
+
+
+def _decrypt_aes_gcm(ciphertext: str) -> str:
+    """Entschluesselt einen AES-256-GCM verschluesselten Wert (kompatibel mit frontend/src/lib/auth.ts)."""
+    import binascii
+    secret = os.environ.get("SESSION_SECRET", "aicompany-secret-change-me")
+    key = hashlib.sha256(secret.encode()).digest()
+    parts = ciphertext.split(":")
+    if len(parts) != 3:
+        return ""
+    iv = binascii.unhexlify(parts[0])
+    tag = binascii.unhexlify(parts[1])
+    encrypted = binascii.unhexlify(parts[2])
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        aesgcm = AESGCM(key)
+        # AESGCM expects nonce + ciphertext+tag combined
+        decrypted = aesgcm.decrypt(iv, encrypted + tag, None)
+        return decrypted.decode("utf-8")
+    except ImportError:
+        pass
+    # Fallback: PyCryptodome
+    try:
+        from Crypto.Cipher import AES
+        cipher = AES.new(key, AES.MODE_GCM, nonce=iv)
+        decrypted = cipher.decrypt_and_verify(encrypted, tag)
+        return decrypted.decode("utf-8")
+    except ImportError:
+        pass
+    logger.error("Keine Crypto-Bibliothek verfuegbar (cryptography oder pycryptodome). API-Key kann nicht entschluesselt werden.")
+    return ""
+
+
+def _load_api_key_from_db() -> str:
+    """Laedt den ANTHROPIC_API_KEY aus der users-Tabelle (verschluesselt gespeichert)."""
+    global _cached_api_key
+    if _cached_api_key:
+        return _cached_api_key
+    try:
+        import psycopg2
+        conn = psycopg2.connect(os.environ.get("DATABASE_URL", "postgresql://aicompany:aicompany@db:5432/aicompany"))
+        cur = conn.cursor()
+        cur.execute("SELECT api_keys FROM users WHERE api_keys IS NOT NULL AND api_keys != '[]'::jsonb LIMIT 1")
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row and row[0]:
+            keys = row[0] if isinstance(row[0], list) else json.loads(row[0])
+            for entry in keys:
+                if entry.get("name") == "ANTHROPIC_API_KEY" and entry.get("key_encrypted"):
+                    decrypted = _decrypt_aes_gcm(entry["key_encrypted"])
+                    if decrypted and decrypted.startswith("sk-"):
+                        _cached_api_key = decrypted
+                        logger.info("ANTHROPIC_API_KEY aus DB geladen")
+                        return decrypted
+    except Exception as e:
+        logger.warning(f"API-Key aus DB laden fehlgeschlagen: {e}")
+    return ""
 
 
 def get_claude_client():
-    """Get Anthropic client if API key is available"""
+    """Get Anthropic client if API key is available (env or DB)"""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        api_key = _load_api_key_from_db()
     if not api_key:
         return None
     try:
