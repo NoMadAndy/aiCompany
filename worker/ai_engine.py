@@ -26,6 +26,20 @@ _model_loading = False
 _model_name = os.environ.get("LOCAL_MODEL", "Qwen/Qwen2.5-3B-Instruct")
 _cached_api_key = None
 _api_key_last_check = 0  # Timestamp des letzten DB-Lookups
+_cached_claude_model = None
+_claude_model_last_check = 0
+
+# Fallback-Liste wenn API nicht erreichbar
+FALLBACK_CLAUDE_MODELS = [
+    {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "tier": "flagship"},
+    {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "tier": "balanced"},
+    {"id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5", "tier": "fast"},
+]
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+
+# Cache fuer verfuegbare Modelle
+_available_models_cache = None
+_available_models_last_check = 0
 
 
 def refresh_api_key_cache():
@@ -34,6 +48,43 @@ def refresh_api_key_cache():
     _cached_api_key = None
     _api_key_last_check = 0
     logger.info("API-Key-Cache zurueckgesetzt")
+
+
+def _get_claude_model() -> str:
+    """Liest das konfigurierte Claude-Modell aus der DB (Admin-Settings). Cache: 60s."""
+    import time
+    global _cached_claude_model, _claude_model_last_check
+
+    # Env-Override hat hoechste Prioritaet
+    env_model = os.environ.get("CLAUDE_MODEL")
+    if env_model:
+        return env_model
+
+    now = time.time()
+    if _cached_claude_model and (now - _claude_model_last_check) < 60:
+        return _cached_claude_model
+    _claude_model_last_check = now
+
+    try:
+        import psycopg2
+        conn = psycopg2.connect(os.environ.get("DATABASE_URL", "postgresql://aicompany:aicompany@db:5432/aicompany"))
+        cur = conn.cursor()
+        cur.execute("SELECT settings FROM users WHERE role = 'admin' AND settings IS NOT NULL LIMIT 1")
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row and row[0]:
+            settings = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+            model = settings.get("CLAUDE_MODEL")
+            if model:
+                _cached_claude_model = model
+                logger.info(f"Claude-Modell aus DB: {model}")
+                return model
+    except Exception as e:
+        logger.warning(f"Claude-Modell aus DB laden fehlgeschlagen: {e}")
+
+    _cached_claude_model = DEFAULT_CLAUDE_MODEL
+    return DEFAULT_CLAUDE_MODEL
 
 
 def _decrypt_aes_gcm(ciphertext: str) -> str:
@@ -173,9 +224,10 @@ async def generate_with_claude(system_prompt: str, user_message: str, max_tokens
         return None
 
     try:
+        model = _get_claude_model()
         response = await asyncio.to_thread(
             client.messages.create,
-            model="claude-sonnet-4-20250514",
+            model=model,
             max_tokens=max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
@@ -248,7 +300,7 @@ async def think_with_meta(system_prompt: str, user_message: str, max_tokens: int
     result = await generate_with_claude(system_prompt, user_message, max_tokens)
     if result:
         logger.info("Response generated via Claude API")
-        meta = {"model": "claude-sonnet-4-20250514", "backend": "claude", "tokens": len(result.split())}
+        meta = {"model": _get_claude_model(), "backend": "claude", "tokens": len(result.split())}
         return result, meta
 
     # Fall back to local model
@@ -316,10 +368,11 @@ async def test_claude_api() -> dict:
     if not client:
         return {"success": False, "error": "Kein API-Key konfiguriert", "latency_ms": 0}
     try:
+        model = _get_claude_model()
         start = time.time()
         response = await asyncio.to_thread(
             client.messages.create,
-            model="claude-sonnet-4-20250514",
+            model=model,
             max_tokens=10,
             messages=[{"role": "user", "content": "Antworte mit OK"}],
         )
@@ -328,7 +381,7 @@ async def test_claude_api() -> dict:
         return {
             "success": True,
             "response": text,
-            "model": "claude-sonnet-4-20250514",
+            "model": model,
             "latency_ms": latency,
             "usage": {
                 "input_tokens": response.usage.input_tokens,
@@ -345,6 +398,47 @@ async def test_claude_api() -> dict:
         return {"success": False, "error": error_msg, "latency_ms": 0}
 
 
+def get_available_models() -> list:
+    """Holt verfuegbare Claude-Modelle von der Anthropic API. Cache: 5min."""
+    import time
+    global _available_models_cache, _available_models_last_check
+
+    now = time.time()
+    if _available_models_cache and (now - _available_models_last_check) < 300:
+        return _available_models_cache
+
+    _available_models_last_check = now
+
+    client = get_claude_client()
+    if not client:
+        return FALLBACK_CLAUDE_MODELS
+
+    try:
+        response = client.models.list(limit=50)
+        models = []
+        for m in response.data:
+            model_id = m.id
+            # Tier aus Model-ID ableiten
+            if "opus" in model_id:
+                tier = "flagship"
+            elif "haiku" in model_id:
+                tier = "fast"
+            else:
+                tier = "balanced"
+            # Lesbaren Namen bauen
+            name = getattr(m, "display_name", model_id)
+            models.append({"id": model_id, "name": name, "tier": tier})
+        if models:
+            _available_models_cache = models
+            logger.info(f"Claude-Modelle von API geladen: {len(models)} Modelle")
+            return models
+    except Exception as e:
+        logger.warning(f"Modell-Liste von API laden fehlgeschlagen: {e}")
+
+    _available_models_cache = FALLBACK_CLAUDE_MODELS
+    return FALLBACK_CLAUDE_MODELS
+
+
 def get_engine_status() -> dict:
     """Get current AI engine status"""
     has_claude = get_claude_client() is not None
@@ -352,6 +446,8 @@ def get_engine_status() -> dict:
 
     status = {
         "claude_api": "available" if has_claude else "no API key",
+        "claude_model": _get_claude_model(),
+        "available_models": get_available_models(),
         "local_model": _model_name if has_local else ("loading..." if _model_loading else "not loaded"),
         "local_model_name": _model_name,
         "gpu_available": False,

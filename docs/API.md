@@ -173,7 +173,7 @@ Alle Agenten mit Task-Statistiken.
       "skills": ["planning", "strategy", "delegation"],
       "status": "active",
       "system_prompt": "...",
-      "model": "claude-sonnet-4-6",
+      "model": "claude-opus-4-6-20250527",
       "total_tasks": 5,
       "completed_tasks": 5
     }

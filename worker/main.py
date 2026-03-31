@@ -17,7 +17,7 @@ import redis
 import httpx
 
 from tasks.research import web_search, search_scientific
-from ai_engine import think, think_with_meta, think_structured, get_engine_status, load_local_model, test_claude_api, refresh_api_key_cache
+from ai_engine import think, think_with_meta, think_structured, get_engine_status, load_local_model, test_claude_api, refresh_api_key_cache, get_available_models
 from agents.memory import extract_and_store_learnings, get_relevant_memories, update_agent_metrics
 from agents.self_evolve import propose_change, apply_change, rollback_change, analyze_and_propose, read_file, list_files
 from app_deployer import deploy_app, stop_app, restart_app, remove_app, get_app_status, get_container_logs, find_available_port, cleanup_orphaned_containers
@@ -1161,6 +1161,13 @@ async def api_refresh_key():
     refresh_api_key_cache()
     status = get_engine_status()
     return {"refreshed": True, "active_backend": status["active_backend"], "claude_api": status["claude_api"]}
+
+
+@app.get("/ai/models")
+async def api_get_models():
+    """Gibt verfuegbare Claude-Modelle zurueck (live von Anthropic API, Cache 5min)."""
+    models = get_available_models()
+    return {"models": models, "default": "claude-sonnet-4-6"}
 
 
 @app.get("/system/metrics")

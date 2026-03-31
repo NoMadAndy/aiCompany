@@ -1,1 +1,2 @@
 node_modules/\n.next/\n__pycache__/\n*.pyc\n.env\n.env.local\ndata/\npostgres_data/\nredis_data/\n*.log\n.docker/
+.env

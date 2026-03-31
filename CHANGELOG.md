@@ -5,6 +5,22 @@ Alle wichtigen Änderungen an AI Company werden hier dokumentiert.
 Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.7.1] - 2026-03-31
+
+### Hinzugefuegt
+- **Claude-Modell auswaehlbar**: Auf der Einstellungen-Seite (Tab "API-Schluessel") kann das Claude-Modell per Dropdown gewaehlt werden
+  - Verfuegbare Modelle werden live von der Anthropic API synchronisiert (5min Cache)
+  - "Synchronisieren" Button laedt aktuelle Modell-Liste direkt von Anthropic
+  - Auswahl wird in der Datenbank gespeichert und vom Worker automatisch uebernommen (60s Cache)
+  - Anzeige des aktiven Modells auch im System-Tab
+- **Worker liest Modell aus DB**: Kein hardcoded Modell mehr — `_get_claude_model()` liest aus Admin-Settings mit Fallback auf Env-Variable `CLAUDE_MODEL` und Default
+- **`GET /ai/models`**: Neuer Worker-Endpoint gibt verfuegbare Modelle aus (live + Fallback)
+
+### Behoben
+- **Falsche Modell-IDs**: `claude-sonnet-4-6-20250514` und aehnliche nicht-existierende IDs entfernt — korrekte IDs: `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`
+- **Settings-Seite**: KI-Modell Konfiguration war veraltet und zeigte statische Werte — jetzt dynamisch und interaktiv
+- **version.json**: War auf 0.5.0 stehen geblieben — jetzt synchron mit CHANGELOG
+
 ## [0.7.0] - 2026-03-30 — "Argus"
 
 ### Hinzugefuegt

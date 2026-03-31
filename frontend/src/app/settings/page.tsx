@@ -40,6 +40,12 @@ export default function SettingsPage() {
   const [overrides, setOverrides] = useState<Record<string, string>>({})
   const [savingSettings, setSavingSettings] = useState(false)
 
+  // Claude Model
+  const [claudeModel, setClaudeModel] = useState('')
+  const [savingModel, setSavingModel] = useState(false)
+  const [availableModels, setAvailableModels] = useState<{ id: string; name: string; tier: string }[]>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
+
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000) }
 
   useEffect(() => {
@@ -53,7 +59,9 @@ export default function SettingsPage() {
       if (res.ok) {
         const data = await res.json()
         setSavedKeys(data.api_keys || [])
-        setOverrides(data.settings || {})
+        const settings = data.settings || {}
+        setOverrides(settings)
+        if (settings.CLAUDE_MODEL) setClaudeModel(settings.CLAUDE_MODEL)
       }
     } catch {}
   }, [])
@@ -72,11 +80,27 @@ export default function SettingsPage() {
     } catch {}
   }, [])
 
+  const loadAvailableModels = useCallback(async () => {
+    setModelsLoading(true)
+    try {
+      const res = await fetch('/api/ai/models')
+      if (res.ok) {
+        const data = await res.json()
+        setAvailableModels(data.models || [])
+      }
+    } catch {}
+    setModelsLoading(false)
+  }, [])
+
   useEffect(() => {
-    if (tab === 'apikeys') loadSettings()
+    loadSettings()
+  }, [loadSettings])
+
+  useEffect(() => {
     if (tab === 'users') loadUsers()
     if (tab === 'system') loadAiStatus()
-  }, [tab, loadSettings, loadUsers, loadAiStatus])
+    if (tab === 'apikeys') loadAvailableModels()
+  }, [tab, loadUsers, loadAiStatus, loadAvailableModels])
 
   const isAdmin = currentUser?.role === 'admin'
 
@@ -373,15 +397,95 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="glass rounded-xl p-5 card-hover">
-                  <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                    <Brain size={18} className="text-indigo-400" />
-                    KI-Modell Konfiguration
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <InfoCard label="Primäres Modell (Claude)" value="claude-sonnet-4-20250514" accent />
-                    <InfoCard label="Lokales GPU-Modell" value="Qwen/Qwen2.5-3B-Instruct" />
-                    <InfoCard label="Fallback" value="Claude → GPU → CPU" />
-                    <InfoCard label="Max Tokens" value="2048 / 1024 (lokal)" />
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                      <Brain size={18} className="text-indigo-400" />
+                      KI-Modell Konfiguration
+                    </h3>
+                    <button
+                      onClick={loadAvailableModels}
+                      disabled={modelsLoading}
+                      className="text-xs px-2 py-1 rounded bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 transition flex items-center gap-1 disabled:opacity-50"
+                    >
+                      {modelsLoading ? (
+                        <span className="inline-block w-3 h-3 border border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                      ) : '↻'} Synchronisieren
+                    </button>
+                  </div>
+                  <p className="text-xs text-[var(--text-secondary)] mb-4">
+                    Verfügbare Modelle werden live von der Anthropic API geladen.
+                  </p>
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      {modelsLoading && availableModels.length === 0 ? (
+                        <div className="text-center py-6 text-[var(--text-secondary)] text-sm">
+                          <span className="inline-block w-4 h-4 border border-indigo-400 border-t-transparent rounded-full animate-spin mr-2" />
+                          Modelle werden geladen...
+                        </div>
+                      ) : availableModels.length === 0 ? (
+                        <div className="text-center py-4 text-[var(--text-secondary)] text-sm">
+                          Keine Modelle verfügbar (API-Key prüfen)
+                        </div>
+                      ) : (
+                        availableModels.map(m => {
+                          const isActive = claudeModel === m.id || (!claudeModel && m.id === 'claude-sonnet-4-6')
+                          const tierLabel = m.tier === 'flagship' ? 'Flagship' : m.tier === 'balanced' ? 'Balanced' : 'Fast'
+                          const tierColor = m.tier === 'flagship' ? 'bg-purple-500/15 text-purple-400' :
+                            m.tier === 'balanced' ? 'bg-indigo-500/15 text-indigo-400' : 'bg-green-500/15 text-green-400'
+                          return (
+                            <button
+                              key={m.id}
+                              onClick={() => setClaudeModel(m.id)}
+                              className={`w-full flex items-center justify-between p-3 rounded-lg transition border ${
+                                isActive
+                                  ? 'border-indigo-500/50 bg-indigo-500/10'
+                                  : 'border-[var(--border)] bg-[rgba(0,0,0,0.2)] hover:bg-[rgba(255,255,255,0.03)]'
+                              }`}
+                            >
+                              <div className="text-left">
+                                <div className="font-medium text-sm flex items-center gap-2">
+                                  {m.name}
+                                  {isActive && <Check size={14} className="text-indigo-400" />}
+                                </div>
+                                <div className="text-xs font-mono text-[var(--text-secondary)]">{m.id}</div>
+                              </div>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${tierColor}`}>
+                                {tierLabel}
+                              </span>
+                            </button>
+                          )
+                        })
+                      )}
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        onClick={async () => {
+                          setSavingModel(true)
+                          const modelToSave = claudeModel || 'claude-sonnet-4-6'
+                          const newSettings = { ...overrides, CLAUDE_MODEL: modelToSave }
+                          const res = await fetch('/api/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'save_settings', settings: newSettings }),
+                          })
+                          setSavingModel(false)
+                          if (res.ok) {
+                            setOverrides(newSettings)
+                            showToast('KI-Modell gespeichert')
+                          }
+                        }}
+                        disabled={savingModel || !claudeModel}
+                        className="px-4 py-2 bg-indigo-600/80 hover:bg-indigo-500 rounded-lg text-sm font-medium transition flex items-center gap-2 disabled:opacity-50"
+                      >
+                        <Save size={14} /> {savingModel ? 'Speichern...' : 'Modell übernehmen'}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-[var(--border)]">
+                      <InfoCard label="Aktives Modell" value={claudeModel || 'claude-sonnet-4-6'} accent />
+                      <InfoCard label="Lokales GPU-Modell" value={overrides.LOCAL_MODEL || 'Qwen/Qwen2.5-3B-Instruct'} />
+                      <InfoCard label="Fallback-Kette" value="Claude → GPU → CPU" />
+                      <InfoCard label="Max Tokens" value="4096 / 2048 (lokal)" />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -526,11 +630,11 @@ export default function SettingsPage() {
                   </h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <InfoCard label="Claude API" value={aiStatus?.claude_api || '...'} accent={aiStatus?.claude_api === 'available'} />
+                    <InfoCard label="Claude Modell" value={aiStatus?.claude_model || '...'} accent />
                     <InfoCard label="Lokales Modell" value={aiStatus?.local_model || 'nicht geladen'} />
                     <InfoCard label="GPU" value={aiStatus?.gpu || 'Nicht verfügbar'} />
                     <InfoCard label="VRAM" value={aiStatus?.vram_used ? `${aiStatus.vram_used} / ${aiStatus.vram_total}` : '...'} />
-                    <InfoCard label="Aktives Backend" value={aiStatus?.active_backend || '...'} accent />
-                    <InfoCard label="Modellname" value={aiStatus?.local_model_name || '...'} />
+                    <InfoCard label="Aktives Backend" value={aiStatus?.active_backend || '...'} />
                   </div>
                 </div>
               </div>
